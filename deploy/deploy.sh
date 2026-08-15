@@ -52,6 +52,11 @@ docker compose exec -T postgres pg_dump -U "${POSTGRES_USER:-root}" "${POSTGRES_
 ls -1t "$BACKUP_DIR"/*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm --
 
 set_image() {
+  # Compose resolves ${NEW_API_IMAGE} from the process environment before it
+  # looks at .env, and this script exported the old value when it sourced .env
+  # above. Updating only the file would leave the running container on the
+  # previous image while every log line claims the new one shipped.
+  export NEW_API_IMAGE="$1"
   if grep -q '^NEW_API_IMAGE=' .env; then
     sed -i "s|^NEW_API_IMAGE=.*|NEW_API_IMAGE=$1|" .env
     return
@@ -63,12 +68,18 @@ echo "==> swapping container"
 set_image "$IMAGE"
 docker compose up -d --no-deps new-api
 
+running=$(docker inspect new-api --format '{{.Config.Image}}' 2>/dev/null || echo none)
+if [ "$running" != "$IMAGE" ]; then
+  echo "error: container runs $running, expected $IMAGE — the swap did not take effect" >&2
+  exit 1
+fi
+
 deadline=$((SECONDS + HEALTH_TIMEOUT))
 while [ "$SECONDS" -lt "$deadline" ]; do
   state=$(docker inspect new-api --format '{{.State.Health.Status}}' 2>/dev/null || echo unknown)
   if [ "$state" = healthy ]; then
     echo "==> $REF is live and healthy"
-    docker images 'new-api' --format '{{.Tag}} {{.ID}}' | tail -n +6 | awk '{print $2}' | xargs -r docker rmi -f --
+    docker images 'new-api' --format '{{.ID}}' | awk '!seen[$0]++' | tail -n +6 | xargs -r docker rmi -- 2>/dev/null || true
     exit 0
   fi
   sleep 5
