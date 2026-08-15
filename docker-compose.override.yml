@@ -1,0 +1,45 @@
+# Fork-local deployment overrides.
+#
+# Docker Compose loads this file automatically alongside docker-compose.yml, so
+# every local customization lives here instead of patching the upstream file.
+# That keeps `git log main..deploy` free of conflicts when upstream edits its
+# own compose file.
+#
+# Values come from .env in this directory; copy deploy/.env.example to get
+# started. Required secrets use ${VAR:?message} so a missing value fails fast
+# instead of silently starting with the upstream demo password.
+name: new-api
+
+services:
+  new-api:
+    image: ${NEW_API_IMAGE:-calciumion/new-api:latest}
+    # main.go waits up to SHUTDOWN_TIMEOUT_SECONDS for in-flight SSE streams;
+    # Docker's 10s default would SIGKILL them long before that.
+    stop_grace_period: 130s
+    environment:
+      - SQL_DSN=${SQL_DSN:?SQL_DSN is required}
+      - LOG_SQL_DSN=${LOG_SQL_DSN:-}
+      - LOG_SQL_CLICKHOUSE_TTL_DAYS=${LOG_SQL_CLICKHOUSE_TTL_DAYS:-0}
+      - REDIS_CONN_STRING=${REDIS_CONN_STRING:?REDIS_CONN_STRING is required}
+      - SESSION_SECRET=${SESSION_SECRET:?SESSION_SECRET is required, otherwise every restart logs all users out}
+      - SHUTDOWN_TIMEOUT_SECONDS=${SHUTDOWN_TIMEOUT_SECONDS:-120}
+      - TZ=${TZ:-Asia/Shanghai}
+      - ERROR_LOG_ENABLED=${ERROR_LOG_ENABLED:-true}
+      - BATCH_UPDATE_ENABLED=${BATCH_UPDATE_ENABLED:-true}
+      - NODE_NAME=${NODE_NAME:-new-api-node-1}
+      - NODE_TYPE=${NODE_TYPE:-}
+      - SESSION_COOKIE_SECURE=${SESSION_COOKIE_SECURE:-}
+      - SESSION_COOKIE_TRUSTED_URL=${SESSION_COOKIE_TRUSTED_URL:-}
+      - TRUSTED_PROXIES=${TRUSTED_PROXIES:-}
+      - STREAMING_TIMEOUT=${STREAMING_TIMEOUT:-}
+      - RELAY_IDLE_CONN_TIMEOUT=${RELAY_IDLE_CONN_TIMEOUT:-}
+      - SYNC_FREQUENCY=${SYNC_FREQUENCY:-}
+
+  redis:
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"]
+
+  postgres:
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-root}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_DB: ${POSTGRES_DB:-new-api}
