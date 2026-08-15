@@ -16,6 +16,12 @@ services:
     # main.go waits up to SHUTDOWN_TIMEOUT_SECONDS for in-flight SSE streams;
     # Docker's 10s default would SIGKILL them long before that.
     stop_grace_period: 130s
+    # !override replaces the upstream list instead of appending to it, which is
+    # what keeps 3000 off the public interface: Caddy terminates TLS and reaches
+    # the app over the compose network, and 127.0.0.1 stays available for
+    # health checks and debugging from the host.
+    ports: !override
+      - "127.0.0.1:3000:3000"
     environment:
       - SQL_DSN=${SQL_DSN:?SQL_DSN is required}
       - LOG_SQL_DSN=${LOG_SQL_DSN:-}
@@ -43,3 +49,29 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-root}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
       POSTGRES_DB: ${POSTGRES_DB:-new-api}
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - APP_DOMAIN=${APP_DOMAIN:?APP_DOMAIN is required so Caddy knows which certificate to request}
+      - ACME_EMAIL=${ACME_EMAIL:-}
+    depends_on:
+      - new-api
+    networks:
+      - new-api-network
+
+volumes:
+  # Certificates and ACME account keys. Losing this volume means re-issuing on
+  # the next start, which counts against Let's Encrypt rate limits.
+  caddy_data:
+  caddy_config:

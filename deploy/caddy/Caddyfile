@@ -1,0 +1,24 @@
+# Reverse proxy in front of new-api. The domain and ACME contact come from the
+# environment (set them in .env) so no host-specific value lives in git.
+{
+	email {$ACME_EMAIL}
+}
+
+{$APP_DOMAIN} {
+	encode zstd gzip
+
+	reverse_proxy new-api:3000 {
+		# Relay responses are server-sent events that can stay open for minutes.
+		# Without this Caddy buffers them and clients see the whole completion
+		# arrive at once, or nothing at all until the upstream closes.
+		flush_interval -1
+
+		header_up X-Real-IP {remote_host}
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}
