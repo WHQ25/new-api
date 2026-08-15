@@ -55,17 +55,40 @@ rebuild happens.
 
 ## Moving a host onto HTTPS
 
-Caddy only publishes 80/443, and the app's own port is bound to `127.0.0.1`, so
-these three steps have to happen together or the site becomes unreachable.
+The topology is browser → Cloudflare → Caddy → app. Caddy serves a **Cloudflare
+Origin CA certificate**, not an ACME one: Cloudflare is the only client that
+ever reaches this port, and an origin certificate is valid for years with no
+renewal job that can fail unattended. Browsers never see it — they get
+Cloudflare's edge certificate — so the private CA is not a problem.
 
-1. Point the domain's A record at the host and wait for it to resolve. Caddy
-   proves ownership over port 80, so the record must be live *before* the first
-   start or the ACME challenge fails and enters a retry backoff.
-2. Fill in `.env`:
+Caddy publishes 80/443 and the app's port is bound to `127.0.0.1`, so all of
+these steps have to land together or the site becomes unreachable.
+
+1. In Cloudflare DNS, point the A record at the host and keep it **proxied**
+   (orange cloud). Delete any AAAA record that still points at Cloudflare.
+2. Generate the keypair and CSR **on the host** so the private key never
+   travels:
+
+   ```bash
+   mkdir -p /etc/new-api/certs && chmod 700 /etc/new-api/certs
+   openssl req -new -newkey rsa:2048 -nodes \
+     -keyout /etc/new-api/certs/origin.key -out /etc/new-api/certs/origin.csr \
+     -subj "/CN=example.com" \
+     -addext "subjectAltName=DNS:example.com,DNS:*.example.com"
+   chmod 600 /etc/new-api/certs/origin.key
+   ```
+
+3. Cloudflare → SSL/TLS → Origin Server → Create Certificate → **Use my private
+   key and CSR**. Paste the CSR, list the same hostnames, and save the issued
+   PEM to `/etc/new-api/certs/origin.pem`.
+4. Cloudflare → SSL/TLS → Overview → encryption mode **Full (strict)**. Anything
+   less leaves the Cloudflare-to-origin leg unverified, which defeats the point
+   of terminating TLS here at all.
+5. Fill in `.env`:
 
    ```
    APP_DOMAIN=api.example.com
-   ACME_EMAIL=you@example.com
+   CADDY_CERT_DIR=/etc/new-api/certs
    SESSION_COOKIE_SECURE=true
    SESSION_COOKIE_TRUSTED_URL=https://api.example.com
    TRUSTED_PROXIES=<compose network subnet>
@@ -74,13 +97,26 @@ these three steps have to happen together or the site becomes unreachable.
    `SESSION_COOKIE_SECURE` without a matching `SESSION_COOKIE_TRUSTED_URL`
    breaks refresh and logout, so never set one without the other. Read the
    subnet with `docker network inspect new-api_new-api-network`.
-3. Deploy the tag as usual. Confirm the certificate before announcing the new
-   URL:
+6. Deploy the tag as usual, then confirm the whole chain before announcing the
+   new URL:
 
    ```bash
-   docker compose logs caddy | grep -i "certificate obtained"
-   curl -sI https://api.example.com/api/status
+   docker compose logs caddy | grep -iE "serving|error"
+   curl -sI https://api.example.com/api/status          # through Cloudflare
+   curl -sI --resolve api.example.com:443:<host-ip> \
+     https://api.example.com/api/status                 # straight at the origin
    ```
 
-Any client pinned to `http://<ip>:3000` stops working at this point — update
-those callers to the HTTPS URL in the same change.
+Two consequences worth knowing before the switch:
+
+- Any client pinned to `http://<ip>:3000` stops working — update those callers
+  in the same change.
+- Cloudflare's proxy read timeout is 125 s on every plan below Enterprise. It is
+  an *idle* timeout, so streaming responses are fine as long as data keeps
+  flowing, but a non-streaming request that thinks for longer than that returns
+  524.
+
+The orange cloud hides the origin IP but does not stop anyone who learns it from
+connecting directly. Restricting 80/443 to [Cloudflare's published
+ranges](https://www.cloudflare.com/ips/) at the firewall is the follow-up that
+makes the proxy actually mandatory.

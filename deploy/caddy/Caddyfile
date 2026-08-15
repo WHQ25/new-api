@@ -1,10 +1,16 @@
-# Reverse proxy in front of new-api. The domain and ACME contact come from the
-# environment (set them in .env) so no host-specific value lives in git.
-{
-	email {$ACME_EMAIL}
-}
-
+# Reverse proxy in front of new-api, behind Cloudflare's proxy.
+#
+# TLS uses a Cloudflare Origin CA certificate rather than ACME: only Cloudflare
+# ever connects to this port, and an origin certificate cannot fail renewal at
+# 03:00 the way a challenge-based one can. Browsers never see it — they get
+# Cloudflare's edge certificate — so its private CA is not a problem. Cloudflare
+# must be set to Full (strict) for this leg to be verified.
+#
+# The domain and certificate paths come from the environment, so no
+# host-specific value is committed.
 {$APP_DOMAIN} {
+	tls /etc/caddy/certs/origin.pem /etc/caddy/certs/origin.key
+
 	encode zstd gzip
 
 	reverse_proxy new-api:3000 {
@@ -13,7 +19,11 @@
 		# arrive at once, or nothing at all until the upstream closes.
 		flush_interval -1
 
-		header_up X-Real-IP {remote_host}
+		# Cloudflare puts the real client in CF-Connecting-IP. Forwarding it as
+		# the sole X-Forwarded-For entry keeps the app from recording Cloudflare
+		# edge addresses as the caller; requests that reach the origin directly
+		# leave it empty and fall back to the connection address.
+		header_up X-Forwarded-For {http.request.header.CF-Connecting-IP}
 	}
 
 	header {

@@ -60,18 +60,21 @@ services:
       - "443:443/udp"
     volumes:
       - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Holds the Cloudflare Origin CA keypair. It lives outside the repository
+      # so the private key can never be committed by accident.
+      - ${CADDY_CERT_DIR:-/etc/new-api/certs}:/etc/caddy/certs:ro
       - caddy_data:/data
       - caddy_config:/config
     environment:
-      - APP_DOMAIN=${APP_DOMAIN:?APP_DOMAIN is required so Caddy knows which certificate to request}
-      - ACME_EMAIL=${ACME_EMAIL:-}
+      - APP_DOMAIN=${APP_DOMAIN:?APP_DOMAIN is required so Caddy knows which site to serve}
     depends_on:
       - new-api
     networks:
       - new-api-network
 
 volumes:
-  # Certificates and ACME account keys. Losing this volume means re-issuing on
-  # the next start, which counts against Let's Encrypt rate limits.
+  # Caddy's own state. The serving certificate comes from CADDY_CERT_DIR, so
+  # losing this volume costs nothing, but Caddy expects both paths to be
+  # writable and falls back to an ephemeral location with a warning otherwise.
   caddy_data:
   caddy_config:
