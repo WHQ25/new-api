@@ -29,6 +29,67 @@ func updateOpenAIImageCount(info *relaycommon.RelayInfo, count int64) {
 	info.PriceData.AddOtherRatio("n", float64(count))
 }
 
+func clientRequestedImageB64JSON(info *relaycommon.RelayInfo) bool {
+	if info == nil {
+		return false
+	}
+	req, ok := info.Request.(*dto.ImageRequest)
+	if !ok || req == nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(req.ResponseFormat), "b64_json")
+}
+
+// fillRequestedOpenAIImageB64 downloads url-only image items when the client
+// asked for response_format=b64_json. Some OpenAI-compatible clients require
+// data[].b64_json and reject url-only payloads.
+func fillRequestedOpenAIImageB64(info *relaycommon.RelayInfo, responseBody []byte) ([]byte, error) {
+	if !clientRequestedImageB64JSON(info) {
+		return responseBody, nil
+	}
+	return convertOpenAIImageURLsToB64(responseBody, func(imageURL string) (string, error) {
+		_, data, err := service.GetImageFromUrl(imageURL)
+		return data, err
+	})
+}
+
+func convertOpenAIImageURLsToB64(responseBody []byte, download func(string) (string, error)) ([]byte, error) {
+	imageCount := gjson.GetBytes(responseBody, "data.#").Int()
+	if imageCount <= 0 {
+		return responseBody, nil
+	}
+	if imageCount > int64(dto.MaxImageN) {
+		return nil, fmt.Errorf("image count %d exceeds max %d", imageCount, dto.MaxImageN)
+	}
+
+	updated := responseBody
+	for i := int64(0); i < imageCount; i++ {
+		prefix := "data." + strconv.FormatInt(i, 10)
+		if strings.TrimSpace(gjson.GetBytes(updated, prefix+".b64_json").String()) != "" {
+			continue
+		}
+		imageURL := strings.TrimSpace(gjson.GetBytes(updated, prefix+".url").String())
+		if imageURL == "" {
+			imageURL = strings.TrimSpace(gjson.GetBytes(updated, prefix+".image_url").String())
+		}
+		if imageURL == "" {
+			return nil, fmt.Errorf("image data[%d] missing b64_json and url", i)
+		}
+		b64, err := download(imageURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert image data[%d] url to b64_json: %w", i, err)
+		}
+		if strings.TrimSpace(b64) == "" {
+			return nil, fmt.Errorf("image data[%d] downloaded empty b64_json", i)
+		}
+		updated, err = sjson.SetBytes(updated, prefix+".b64_json", b64)
+		if err != nil {
+			return nil, fmt.Errorf("failed to write b64_json for image data[%d]: %w", i, err)
+		}
+	}
+	return updated, nil
+}
+
 // OpenaiImageHandler handles non-streaming OpenAI image responses
 // (generations/edits), returning the parsed usage for billing.
 func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.Response) (*dto.Usage, *types.NewAPIError) {
@@ -47,6 +108,11 @@ func OpenaiImageHandler(c *gin.Context, info *relaycommon.RelayInfo, resp *http.
 
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
+	}
+
+	responseBody, err = fillRequestedOpenAIImageB64(info, responseBody)
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
 	}
 
 	updateOpenAIImageCount(info, gjson.GetBytes(responseBody, "data.#").Int())
@@ -249,6 +315,12 @@ func openaiImageJSONAsStreamHandler(c *gin.Context, info *relaycommon.RelayInfo,
 	if oaiError := usageResp.GetOpenAIError(); oaiError != nil && oaiError.Type != "" {
 		return nil, types.WithOpenAIError(*oaiError, resp.StatusCode)
 	}
+
+	responseBody, err = fillRequestedOpenAIImageB64(info, responseBody)
+	if err != nil {
+		return nil, types.NewOpenAIError(err, types.ErrorCodeBadResponseBody, http.StatusBadGateway)
+	}
+
 	normalizeOpenAIUsage(&usageResp.Usage)
 	applyUsagePostProcessing(info, &usageResp.Usage, responseBody)
 
