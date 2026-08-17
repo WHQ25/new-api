@@ -596,7 +596,12 @@ func RelayTask(c *gin.Context) {
 			ModelRatio:      relayInfo.PriceData.ModelRatio,
 			OtherRatios:     relayInfo.PriceData.OtherRatios(),
 			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling:  common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice,
+			PerCallBilling: relayInfo.PriceData.BillingMode != "video_token" &&
+				(common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice),
+			BillingMode:     relayInfo.PriceData.BillingMode,
+			VideoTokenPrice: relayInfo.PriceData.VideoTokenPrice,
+			VideoTokenTier:  relayInfo.PriceData.VideoTokenTier,
+			EstimatedTokens: relayInfo.PriceData.EstimatedTokens,
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData

@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/logger"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/gin-gonic/gin"
@@ -50,6 +51,14 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	if info.IsModelMapped {
 		other["is_model_mapped"] = true
 		other["upstream_model_name"] = info.UpstreamModelName
+	}
+	if info.PriceData.BillingMode != "" {
+		other["billing_mode"] = info.PriceData.BillingMode
+	}
+	if info.PriceData.VideoTokenTier != "" {
+		other["video_token_tier"] = info.PriceData.VideoTokenTier
+		other["video_token_price"] = info.PriceData.VideoTokenPrice
+		other["estimated_tokens"] = info.PriceData.EstimatedTokens
 	}
 	attachQuotaSaturation(c, info, other)
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
@@ -285,6 +294,18 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 // 与预扣费的差额进行补扣或退还。支持钱包和订阅计费来源。
 func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTokens int) {
 	if totalTokens <= 0 {
+		return
+	}
+
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.BillingMode == billing_setting.BillingModeVideoToken && bc.VideoTokenPrice > 0 {
+		groupRatio := bc.GroupRatio
+		if groupRatio != groupRatio || groupRatio < 0 {
+			logger.LogWarn(ctx, fmt.Sprintf("任务 %s video token 快照分组倍率非法: %v", task.TaskID, bc.GroupRatio))
+			return
+		}
+		actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) / 1_000_000 * bc.VideoTokenPrice * common.QuotaPerUnit * groupRatio)
+		reason := fmt.Sprintf("video token重算：tokens=%d, tier=%s, usdPerM=%.4f, groupRatio=%.2f", totalTokens, bc.VideoTokenTier, bc.VideoTokenPrice, groupRatio)
+		RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
 		return
 	}
 

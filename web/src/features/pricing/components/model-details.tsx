@@ -67,8 +67,16 @@ import {
   isDynamicPricingModel,
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
-import { getAvailableGroups, isTokenBasedModel } from '../lib/model-helpers'
+import {
+  getAvailableGroups,
+  getConfiguredGroupRatio,
+  isTokenBasedModel,
+} from '../lib/model-helpers'
 import { formatFixedPrice, formatGroupPrice } from '../lib/price'
+import {
+  getVideoTokenCompactSummary,
+  isVideoTokenPricingModel,
+} from '../lib/video-token-price'
 import type {
   ModelCapability,
   PriceType,
@@ -77,6 +85,7 @@ import type {
 } from '../types'
 import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
+import { VideoTokenPriceGrid } from './video-token-pricing'
 import { ModelDetailsApi } from './model-details-api'
 import { ModelDetailsPerformance } from './model-details-performance'
 
@@ -578,6 +587,26 @@ function PriceSection(props: {
   const tokenUnitLabel = props.tokenUnit === 'K' ? '1K' : '1M'
   const baseGroupKey = '_base'
   const baseGroupRatioMap = { [baseGroupKey]: 1 }
+  if (isVideoTokenPricingModel(props.model)) {
+    return (
+      <section>
+        <SectionTitle>{t('Base Price')}</SectionTitle>
+        <p className='text-muted-foreground mb-3 text-xs'>
+          {t(
+            'Per 1M tokens, split by resolution and whether the request includes video input.'
+          )}
+        </p>
+        <VideoTokenPriceGrid
+          model={props.model}
+          tokenUnit={props.tokenUnit}
+          showRechargePrice={props.showRechargePrice}
+          priceRate={props.priceRate}
+          usdExchangeRate={props.usdExchangeRate}
+          groupRatioMultiplier={1}
+        />
+      </section>
+    )
+  }
   const dynamicSummary = getDynamicPricingSummary(props.model, {
     tokenUnit: props.tokenUnit,
     showRechargePrice: props.showRechargePrice,
@@ -909,6 +938,54 @@ function GroupPricingSection(props: {
 
   const thClass =
     'text-muted-foreground py-2 text-[10px] font-medium tracking-wider uppercase'
+
+  if (isVideoTokenPricingModel(props.model)) {
+    return (
+      <section>
+        <SectionTitle>{t('Pricing by Group')}</SectionTitle>
+        <AutoGroupChain model={props.model} autoGroups={props.autoGroups} />
+        <div className='-mx-4 overflow-x-auto sm:mx-0'>
+          <table className='w-full min-w-[20rem] text-left text-xs'>
+            <thead>
+              <tr className='border-b'>
+                <th className={`${thClass} px-4 sm:px-0`}>{t('Group')}</th>
+                <th className={`${thClass} px-4 text-right sm:px-0`}>
+                  {t('Price')}
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {availableGroups.map((group) => {
+                const summary = getVideoTokenCompactSummary(props.model, {
+                  tokenUnit: props.tokenUnit,
+                  showRechargePrice,
+                  priceRate: props.priceRate,
+                  usdExchangeRate: props.usdExchangeRate,
+                  groupRatioMultiplier: getConfiguredGroupRatio(
+                    props.groupRatio,
+                    group
+                  ),
+                })
+                return (
+                  <tr key={group} className='border-border/60 border-t'>
+                    <td className='px-4 py-2 sm:px-0'>
+                      <GroupBadge group={group} />
+                    </td>
+                    <td className='px-4 py-2 text-right font-mono tabular-nums sm:px-0'>
+                      {summary?.formatted ?? t('Unset price')}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className='text-muted-foreground/40 mt-1.5 text-[10px]'>
+          {t('Prices shown per')} {tokenUnitLabel} tokens
+        </p>
+      </section>
+    )
+  }
 
   if (isDynamicPricingModel(props.model)) {
     const dynamicTiers = getDynamicPricingTiers(props.model)

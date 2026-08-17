@@ -35,6 +35,7 @@ type Pricing struct {
 	SupportedEndpointTypes []constant.EndpointType `json:"supported_endpoint_types"`
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
+	VideoTokenPrice        map[string]float64      `json:"video_token_price,omitempty"`
 	PricingVersion         string                  `json:"pricing_version,omitempty"`
 }
 
@@ -374,7 +375,13 @@ func updatePricing() {
 			pricing.VendorID = meta.VendorID
 		}
 		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
-		if findPrice {
+		if billing_setting.IsVideoTokenBilling(model) {
+			pricing.BillingMode = billing_setting.BillingModeVideoToken
+			if table := billing_setting.GetVideoTokenPriceTable(model); len(table) > 0 {
+				pricing.VideoTokenPrice = table
+			}
+			pricing.QuotaType = 0
+		} else if findPrice {
 			pricing.ModelPrice = modelPrice
 			pricing.QuotaType = 1
 		} else {

@@ -19,6 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 import { splitBillingExprAndRequestRules } from '@/features/pricing/lib/billing-expr'
 
 import { safeJsonParse } from '../utils/json-parser'
+import {
+  countVideoTokenPrices,
+  parseVideoTokenPriceTable,
+  type VideoTokenPriceTable,
+} from './model-pricing-core'
 import { formatPricingNumber } from './pricing-format'
 
 export type ModelPricingSnapshotInput = {
@@ -32,6 +37,7 @@ export type ModelPricingSnapshotInput = {
   audioCompletionRatio: string
   billingMode: string
   billingExpr: string
+  videoTokenPrice: string
 }
 
 export type ModelPricingSnapshot = {
@@ -47,6 +53,7 @@ export type ModelPricingSnapshot = {
   billingMode?: string
   billingExpr?: string
   requestRuleExpr?: string
+  videoTokenPrice?: VideoTokenPriceTable
   hasConflict: boolean
 }
 
@@ -64,6 +71,7 @@ export const hasPricingValue = (value?: string) =>
 export const isBasePricingUnset = (snapshot?: ModelPricingSnapshot) =>
   !snapshot ||
   (snapshot.billingMode !== 'tiered_expr' &&
+    snapshot.billingMode !== 'video_token' &&
     !hasPricingValue(snapshot.price) &&
     !hasPricingValue(snapshot.ratio))
 
@@ -83,6 +91,7 @@ const ratioToPrice = (ratio?: string, denominator?: string) => {
 export const getModeLabel = (mode?: string) => {
   if (mode === 'per-request') return 'Per-request'
   if (mode === 'tiered_expr') return 'Expression'
+  if (mode === 'video_token') return 'Video tiers'
   return 'Per-token'
 }
 
@@ -91,6 +100,7 @@ export const getModeVariant = (
 ): 'warning' | 'info' | 'success' => {
   if (mode === 'per-request') return 'warning'
   if (mode === 'tiered_expr') return 'info'
+  if (mode === 'video_token') return 'info'
   return 'success'
 }
 
@@ -109,6 +119,12 @@ export const getPriceSummary = (
   row: ModelPricingSnapshot,
   t: (key: string) => string
 ) => {
+  if (row.billingMode === 'video_token') {
+    const filled = countVideoTokenPrices(row.videoTokenPrice)
+    return filled > 0
+      ? `${t('Video tiers')} · ${filled}`
+      : t('Unset price')
+  }
   if (row.billingMode === 'tiered_expr') {
     return getExpressionSummary(row, t)
   }
@@ -137,6 +153,9 @@ export const getPriceDetail = (
   row: ModelPricingSnapshot,
   t: (key: string) => string
 ) => {
+  if (row.billingMode === 'video_token') {
+    return t('Resolution and video-input token prices')
+  }
   if (row.billingMode === 'tiered_expr') {
     return row.requestRuleExpr
       ? t('Includes request rules')
@@ -174,6 +193,7 @@ export const buildModelSnapshots = ({
   audioCompletionRatio,
   billingMode,
   billingExpr,
+  videoTokenPrice,
 }: ModelPricingSnapshotInput): ModelPricingSnapshot[] => {
   const priceMap = safeJsonParse<Record<string, number>>(modelPrice, {
     fallback: {},
@@ -215,6 +235,12 @@ export const buildModelSnapshots = ({
     fallback: {},
     context: 'billing expression',
   })
+  const videoTokenPriceMap = safeJsonParse<
+    Record<string, Record<string, number>>
+  >(videoTokenPrice, {
+    fallback: {},
+    context: 'video token prices',
+  })
 
   const modelNames = new Set([
     ...Object.keys(priceMap),
@@ -227,9 +253,10 @@ export const buildModelSnapshots = ({
     ...Object.keys(audioCompletionMap),
     ...Object.keys(billingModeMap),
     ...Object.keys(billingExprMap),
+    ...Object.keys(videoTokenPriceMap),
   ])
 
-  return Array.from(modelNames).map((name) => {
+  return [...modelNames].map((name) => {
     const price = priceMap[name]?.toString() || ''
     const ratio = ratioMap[name]?.toString() || ''
     const cache = cacheMap[name]?.toString() || ''
@@ -240,6 +267,14 @@ export const buildModelSnapshots = ({
     const audioCompletion = audioCompletionMap[name]?.toString() || ''
 
     const modeForModel = billingModeMap[name]
+    if (modeForModel === 'video_token') {
+      return {
+        name,
+        billingMode: 'video_token',
+        videoTokenPrice: parseVideoTokenPriceTable(videoTokenPriceMap[name]),
+        hasConflict: false,
+      }
+    }
     if (modeForModel === 'tiered_expr') {
       const fullExpr = billingExprMap[name] || ''
       const { billingExpr: pureExpr, requestRuleExpr } =
@@ -299,5 +334,6 @@ export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
     billingMode: snapshot.billingMode || 'per-token',
     billingExpr: snapshot.billingExpr || '',
     requestRuleExpr: snapshot.requestRuleExpr || '',
+    videoTokenPrice: snapshot.videoTokenPrice || {},
   })
 }

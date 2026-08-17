@@ -59,6 +59,7 @@ type ModelFormValues = {
   ExposeRatioEnabled: boolean
   BillingMode: string
   BillingExpr: string
+  VideoTokenPrice: string
 }
 
 type ModelRatioFormProps = {
@@ -80,6 +81,7 @@ type ModelJsonFieldName =
   | 'ImageRatio'
   | 'AudioRatio'
   | 'AudioCompletionRatio'
+  | 'VideoTokenPrice'
 
 const modelJsonFields: Array<{
   name: ModelJsonFieldName
@@ -129,6 +131,12 @@ const modelJsonFields: Array<{
     name: 'AudioCompletionRatio',
     labelKey: 'Audio completion ratio',
     descriptionKey: 'Ratio applied to audio completions for streaming models.',
+  },
+  {
+    name: 'VideoTokenPrice',
+    labelKey: 'Video tier prices',
+    descriptionKey:
+      'JSON map of model → {480p, 480p_video, 720p, ...} USD per 1M tokens.',
   },
 ]
 
@@ -275,6 +283,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               savedAudioCompletionRatio={savedValues.AudioCompletionRatio}
               savedBillingMode={savedValues.BillingMode}
               savedBillingExpr={savedValues.BillingExpr}
+              savedVideoTokenPrice={savedValues.VideoTokenPrice}
               modelPrice={form.watch('ModelPrice')}
               modelRatio={form.watch('ModelRatio')}
               cacheRatio={form.watch('CacheRatio')}
@@ -285,6 +294,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               audioCompletionRatio={form.watch('AudioCompletionRatio')}
               billingMode={form.watch('BillingMode')}
               billingExpr={form.watch('BillingExpr')}
+              videoTokenPrice={form.watch('VideoTokenPrice')}
               candidateModelNames={
                 isUnsetVariant ? enabledModelsQuery.data?.data : undefined
               }
@@ -298,6 +308,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
                 const fieldMap: Record<string, keyof ModelFormValues> = {
                   'billing_setting.billing_mode': 'BillingMode',
                   'billing_setting.billing_expr': 'BillingExpr',
+                  'billing_setting.video_token_price': 'VideoTokenPrice',
                 }
                 const formField =
                   fieldMap[field] || (field as keyof ModelFormValues)

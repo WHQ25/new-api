@@ -35,6 +35,7 @@ import {
 } from '../lib/dynamic-price'
 import { parseTags } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
+import { isVideoTokenPricingModel } from '../lib/video-token-price'
 import {
   formatPrice,
   formatRequestPrice,
@@ -42,6 +43,7 @@ import {
 } from '../lib/price'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
+import { VideoTokenPriceSummary } from './video-token-pricing'
 
 // ----------------------------------------------------------------------------
 // Pricing Table Columns
@@ -171,6 +173,19 @@ export function usePricingColumns(
                   })}`}
               </div>
             </div>
+          )
+        }
+
+        if (isVideoTokenPricingModel(model)) {
+          return (
+            <VideoTokenPriceSummary
+              model={model}
+              tokenUnit={tokenUnit}
+              showRechargePrice={showRechargePrice}
+              priceRate={priceRate}
+              usdExchangeRate={usdExchangeRate}
+              selectedGroup={selectedGroup}
+            />
           )
         }
 

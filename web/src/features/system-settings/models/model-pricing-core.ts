@@ -39,7 +39,77 @@ export type ModelPricingFormValues = z.infer<
   ReturnType<typeof createModelPricingSchema>
 >
 
-export type PricingMode = 'per-token' | 'per-request' | 'tiered_expr'
+export type PricingMode =
+  | 'per-token'
+  | 'per-request'
+  | 'tiered_expr'
+  | 'video_token'
+
+export const VIDEO_TOKEN_RESOLUTIONS = ['480p', '720p', '1080p', '4k'] as const
+
+export type VideoTokenResolution = (typeof VIDEO_TOKEN_RESOLUTIONS)[number]
+
+export type VideoTokenPriceTable = Partial<
+  Record<`${VideoTokenResolution}` | `${VideoTokenResolution}_video`, string>
+>
+
+export const emptyVideoTokenPriceTable = (): VideoTokenPriceTable => ({
+  '480p': '',
+  '480p_video': '',
+  '720p': '',
+  '720p_video': '',
+  '1080p': '',
+  '1080p_video': '',
+  '4k': '',
+  '4k_video': '',
+})
+
+export const videoTokenPriceKeys: Array<keyof VideoTokenPriceTable> = [
+  '480p',
+  '480p_video',
+  '720p',
+  '720p_video',
+  '1080p',
+  '1080p_video',
+  '4k',
+  '4k_video',
+]
+
+export const parseVideoTokenPriceTable = (
+  raw?: Record<string, number> | VideoTokenPriceTable | null
+): VideoTokenPriceTable => {
+  const table = emptyVideoTokenPriceTable()
+  if (!raw) return table
+  for (const key of videoTokenPriceKeys) {
+    const value = raw[key]
+    if (value === undefined || value === null || value === '') continue
+    const numeric = typeof value === 'number' ? value : Number(value)
+    if (Number.isFinite(numeric) && numeric > 0) {
+      table[key] = formatPricingNumber(numeric)
+    }
+  }
+  return table
+}
+
+export const serializeVideoTokenPriceTable = (
+  table?: VideoTokenPriceTable
+): Record<string, number> => {
+  const out: Record<string, number> = {}
+  if (!table) return out
+  for (const key of videoTokenPriceKeys) {
+    const numeric = toNumberOrNull(table[key] || '')
+    if (numeric !== null && numeric > 0) out[key] = numeric
+  }
+  return out
+}
+
+export const countVideoTokenPrices = (table?: VideoTokenPriceTable) =>
+  table
+    ? videoTokenPriceKeys.filter((key) => {
+        const numeric = toNumberOrNull(table[key] || '')
+        return numeric !== null && numeric > 0
+      }).length
+    : 0
 
 export type LaneKey =
   | 'completion'
@@ -62,6 +132,7 @@ export type ModelRatioData = {
   billingMode?: PricingMode
   billingExpr?: string
   requestRuleExpr?: string
+  videoTokenPrice?: VideoTokenPriceTable
 }
 
 export type PreviewRow = {
@@ -217,6 +288,18 @@ export function buildPreviewRows(
   laneEnabled: Record<LaneKey, boolean>,
   t: (key: string) => string
 ): PreviewRow[] {
+  if (mode === 'video_token') {
+    return [
+      { key: 'mode', label: 'BillingMode', value: 'video_token' },
+      {
+        key: 'hint',
+        label: t('Video tiers'),
+        value: t('USD price per 1M tokens for each resolution and input type.'),
+        multiline: true,
+      },
+    ]
+  }
+
   if (mode === 'tiered_expr') {
     const effectiveExpr = combineBillingExpr(billingExpr, requestRuleExpr)
     return [

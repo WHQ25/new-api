@@ -117,6 +117,7 @@ const createModelSchema = (t: Translate) =>
     ExposeRatioEnabled: z.boolean(),
     BillingMode: createJsonStringField(t),
     BillingExpr: createJsonStringField(t),
+    VideoTokenPrice: createJsonStringField(t),
   })
 
 const createGroupSchema = (t: Translate) =>
@@ -138,6 +139,55 @@ const createGroupSchema = (t: Translate) =>
 
 type ModelFormValues = z.infer<ReturnType<typeof createModelSchema>>
 type GroupFormValues = z.infer<ReturnType<typeof createGroupSchema>>
+
+const VIDEO_TOKEN_CONFLICT_FIELDS = [
+  'ModelPrice',
+  'ModelRatio',
+  'CacheRatio',
+  'CreateCacheRatio',
+  'CompletionRatio',
+  'ImageRatio',
+  'AudioRatio',
+  'AudioCompletionRatio',
+] as const
+
+function parseJsonRecord(raw: string): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(raw || '{}')
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>
+    }
+  } catch {
+    // Invalid JSON is rejected by the form schema before save.
+  }
+  return {}
+}
+
+function stripVideoTokenConflicts(values: ModelFormValues): ModelFormValues {
+  const modes = parseJsonRecord(values.BillingMode)
+  const videoModels = Object.entries(modes)
+    .filter(([, mode]) => mode === 'video_token')
+    .map(([name]) => name)
+  if (videoModels.length === 0) {
+    return values
+  }
+
+  const next = { ...values }
+  for (const field of VIDEO_TOKEN_CONFLICT_FIELDS) {
+    const parsed = parseJsonRecord(next[field])
+    let changed = false
+    for (const name of videoModels) {
+      if (Object.hasOwn(parsed, name)) {
+        delete parsed[name]
+        changed = true
+      }
+    }
+    if (changed) {
+      next[field] = JSON.stringify(parsed)
+    }
+  }
+  return next
+}
 type RatioTabId =
   | 'models'
   | 'unset-models'
@@ -195,6 +245,7 @@ export function RatioSettingsCard({
     ExposeRatioEnabled: modelDefaults.ExposeRatioEnabled,
     BillingMode: normalizeJsonString(modelDefaults.BillingMode),
     BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
+    VideoTokenPrice: normalizeJsonString(modelDefaults.VideoTokenPrice),
   })
   const [savedModelValues, setSavedModelValues] = useState(
     modelNormalizedDefaults.current
@@ -232,6 +283,7 @@ export function RatioSettingsCard({
       ),
       BillingMode: formatJsonForTextarea(modelDefaults.BillingMode),
       BillingExpr: formatJsonForTextarea(modelDefaults.BillingExpr),
+      VideoTokenPrice: formatJsonForTextarea(modelDefaults.VideoTokenPrice),
     },
   })
 
@@ -266,6 +318,7 @@ export function RatioSettingsCard({
       ExposeRatioEnabled: modelDefaults.ExposeRatioEnabled,
       BillingMode: normalizeJsonString(modelDefaults.BillingMode),
       BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
+      VideoTokenPrice: normalizeJsonString(modelDefaults.VideoTokenPrice),
     }
     setSavedModelValues(modelNormalizedDefaults.current)
 
@@ -283,6 +336,7 @@ export function RatioSettingsCard({
       ),
       BillingMode: formatJsonForTextarea(modelDefaults.BillingMode),
       BillingExpr: formatJsonForTextarea(modelDefaults.BillingExpr),
+      VideoTokenPrice: formatJsonForTextarea(modelDefaults.VideoTokenPrice),
     })
   }, [modelDefaults, modelForm])
 
@@ -315,23 +369,26 @@ export function RatioSettingsCard({
 
   const saveModelRatios = useCallback(
     async (values: ModelFormValues) => {
+      const cleaned = stripVideoTokenConflicts(values)
       const normalized = {
-        ModelPrice: normalizeJsonString(values.ModelPrice),
-        ModelRatio: normalizeJsonString(values.ModelRatio),
-        CacheRatio: normalizeJsonString(values.CacheRatio),
-        CreateCacheRatio: normalizeJsonString(values.CreateCacheRatio),
-        CompletionRatio: normalizeJsonString(values.CompletionRatio),
-        ImageRatio: normalizeJsonString(values.ImageRatio),
-        AudioRatio: normalizeJsonString(values.AudioRatio),
-        AudioCompletionRatio: normalizeJsonString(values.AudioCompletionRatio),
-        ExposeRatioEnabled: values.ExposeRatioEnabled,
-        BillingMode: normalizeJsonString(values.BillingMode),
-        BillingExpr: normalizeJsonString(values.BillingExpr),
+        ModelPrice: normalizeJsonString(cleaned.ModelPrice),
+        ModelRatio: normalizeJsonString(cleaned.ModelRatio),
+        CacheRatio: normalizeJsonString(cleaned.CacheRatio),
+        CreateCacheRatio: normalizeJsonString(cleaned.CreateCacheRatio),
+        CompletionRatio: normalizeJsonString(cleaned.CompletionRatio),
+        ImageRatio: normalizeJsonString(cleaned.ImageRatio),
+        AudioRatio: normalizeJsonString(cleaned.AudioRatio),
+        AudioCompletionRatio: normalizeJsonString(cleaned.AudioCompletionRatio),
+        ExposeRatioEnabled: cleaned.ExposeRatioEnabled,
+        BillingMode: normalizeJsonString(cleaned.BillingMode),
+        BillingExpr: normalizeJsonString(cleaned.BillingExpr),
+        VideoTokenPrice: normalizeJsonString(cleaned.VideoTokenPrice),
       }
 
       const apiKeyMap: Record<string, string> = {
         BillingMode: 'billing_setting.billing_mode',
         BillingExpr: 'billing_setting.billing_expr',
+        VideoTokenPrice: 'billing_setting.video_token_price',
       }
 
       const updates = (
@@ -458,6 +515,7 @@ export function RatioSettingsCard({
           AudioCompletionRatio: modelDefaults.AudioCompletionRatio,
           'billing_setting.billing_mode': modelDefaults.BillingMode,
           'billing_setting.billing_expr': modelDefaults.BillingExpr,
+          'billing_setting.video_token_price': modelDefaults.VideoTokenPrice,
         }}
       />
     )

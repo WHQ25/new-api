@@ -92,6 +92,14 @@ export function buildModelRatioColumns({
               className='shrink-0'
             />
           )}
+          {row.original.billingMode === 'video_token' && (
+            <StatusBadge
+              label={t('Video tiers')}
+              variant='info'
+              copyable={false}
+              className='shrink-0'
+            />
+          )}
           {row.original.hasConflict && (
             <StatusBadge
               label={t('Conflict')}

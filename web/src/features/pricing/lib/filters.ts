@@ -24,6 +24,7 @@ import {
   ENDPOINT_TYPES,
 } from '../constants'
 import type { PricingModel } from '../types'
+import { getVideoTokenPriceRange } from './video-token-price'
 
 // ----------------------------------------------------------------------------
 // Filter Utilities
@@ -102,6 +103,10 @@ export function filterByEndpointType(
  * Get model price for sorting
  */
 function getModelPrice(model: PricingModel): number {
+  const range = getVideoTokenPriceRange(model)
+  if (range) {
+    return range.min / 2
+  }
   return model.quota_type === 0 ? model.model_ratio : model.model_price || 0
 }
 
@@ -183,7 +188,7 @@ export function extractAllTags(models: PricingModel[]): string[] {
     }
   })
 
-  return Array.from(tagSet).sort((a, b) => a.localeCompare(b))
+  return [...tagSet].sort((a, b) => a.localeCompare(b))
 }
 
 /**

@@ -29,6 +29,64 @@ import {
   SettingsControlGroup,
   SettingsSwitchField,
 } from '../components/settings-form-layout'
+import {
+  VIDEO_TOKEN_RESOLUTIONS,
+  numericDraftRegex,
+  type VideoTokenPriceTable,
+  type VideoTokenResolution,
+} from './model-pricing-core'
+
+export function VideoTokenPriceGrid(props: {
+  value: VideoTokenPriceTable
+  onChange: (next: VideoTokenPriceTable) => void
+}) {
+  const { t } = useTranslation()
+
+  const updateCell = (
+    resolution: VideoTokenResolution,
+    hasVideo: boolean,
+    raw: string
+  ) => {
+    if (!numericDraftRegex.test(raw)) return
+    const key = hasVideo ? `${resolution}_video` : resolution
+    props.onChange({ ...props.value, [key]: raw })
+  }
+
+  return (
+    <div className='overflow-x-auto'>
+      <table className='w-full min-w-[28rem] border-collapse text-sm'>
+        <thead>
+          <tr className='text-muted-foreground text-left'>
+            <th className='px-2 py-2 font-medium'>{t('Resolution')}</th>
+            <th className='px-2 py-2 font-medium'>{t('No video input')}</th>
+            <th className='px-2 py-2 font-medium'>{t('With video input')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {VIDEO_TOKEN_RESOLUTIONS.map((resolution) => (
+            <tr key={resolution} className='border-border/60 border-t'>
+              <td className='px-2 py-3 font-medium uppercase'>{resolution}</td>
+              <td className='px-2 py-3'>
+                <PriceInput
+                  value={props.value[resolution] || ''}
+                  placeholder='7'
+                  onChange={(value) => updateCell(resolution, false, value)}
+                />
+              </td>
+              <td className='px-2 py-3'>
+                <PriceInput
+                  value={props.value[`${resolution}_video`] || ''}
+                  placeholder='4.2'
+                  onChange={(value) => updateCell(resolution, true, value)}
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
 
 export function PriceInput(props: {
   value: string

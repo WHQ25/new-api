@@ -151,6 +151,8 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 		TaskID: upstreamVideo.TaskID,
 	}
 
+	taskInfo.TotalTokens = relaycommon.ParseVideoTotalTokens(respBody)
+
 	// Map upstream status to internal status
 	switch upstreamVideo.Status {
 	case "submitted", "queued":

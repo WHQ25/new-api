@@ -19,6 +19,7 @@ import (
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/gin-gonic/gin"
 )
 
@@ -177,29 +178,41 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		info.PublicTaskID = model.GenerateTaskID()
 	}
 
-	// 4. 价格计算：基础模型价格
+	// 4. 价格计算：视频分档价走像素公式；其它模型保持按次/按量 + 渠道估算。
 	info.OriginModelName = modelName
-	priceData, err := helper.ModelPriceHelperPerCall(c, info)
-	if err != nil {
-		return nil, service.TaskErrorWrapper(err, "model_price_error", http.StatusBadRequest)
+	videoTokenBilling := billing_setting.IsVideoTokenBilling(modelName)
+	if videoTokenBilling {
+		priceData, priceErr := helper.ModelPriceHelperVideoToken(c, info)
+		if priceErr != nil {
+			return nil, service.TaskErrorWrapperLocal(priceErr, "video_token_price_error", http.StatusBadRequest)
+		}
+		info.PriceData = priceData
+	} else {
+		priceData, priceErr := helper.ModelPriceHelperPerCall(c, info)
+		if priceErr != nil {
+			return nil, service.TaskErrorWrapper(priceErr, "model_price_error", http.StatusBadRequest)
+		}
+		info.PriceData = priceData
 	}
-	info.PriceData = priceData
 
 	// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
 	//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
 	//    ResolveOriginTask 可能已在 remix 路径中预设了 OtherRatios，此处合并。
-	if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
-		for k, v := range estimatedRatios {
-			info.PriceData.AddOtherRatio(k, v)
+	//    视频分档价已经按像素公式计入时长/分辨率，不再叠渠道 OtherRatios。
+	if !videoTokenBilling {
+		if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
+			for k, v := range estimatedRatios {
+				info.PriceData.AddOtherRatio(k, v)
+			}
 		}
-	}
 
-	// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
-	if !common.StringsContains(constant.TaskPricePatches, modelName) {
-		quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
-		quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
-		info.PriceData.Quota = quota
-		noteTaskQuotaClamp(info, clamp)
+		// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
+		if !common.StringsContains(constant.TaskPricePatches, modelName) {
+			quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
+			quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
+			info.PriceData.Quota = quota
+			noteTaskQuotaClamp(info, clamp)
+		}
 	}
 
 	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）

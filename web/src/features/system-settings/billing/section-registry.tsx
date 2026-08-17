@@ -38,6 +38,7 @@ const getModelDefaults = (settings: BillingSettings) => ({
   ExposeRatioEnabled: settings.ExposeRatioEnabled,
   BillingMode: settings['billing_setting.billing_mode'],
   BillingExpr: settings['billing_setting.billing_expr'],
+  VideoTokenPrice: settings['billing_setting.video_token_price'],
 })
 
 const getGroupDefaults = (settings: BillingSettings) => ({

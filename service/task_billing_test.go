@@ -887,6 +887,40 @@ func TestRecalculate_ActualQuotaZero(t *testing.T) {
 	assert.Equal(t, int64(0), countLogs(t))
 }
 
+func TestRecalculateTaskQuotaByTokens_VideoTokenUsesSnapshotPrice(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 21, 21, 21
+	const initQuota, tokenRemain = 5_000_000, 5_000_000
+	// 1080p 5s official tokens at $7/M, group=1, QuotaPerUnit=500000 → 850500
+	const actualTokens = 243000
+	const usdPerM = 7.0
+	actualQuota, clamp := common.QuotaFromFloatChecked(float64(actualTokens) / 1_000_000 * usdPerM * common.QuotaPerUnit)
+	require.Nil(t, clamp)
+	preConsumed := actualQuota + 1000
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-video-token", tokenRemain)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, tokenID, preConsumed, 1)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.BillingMode = "video_token"
+	task.PrivateData.BillingContext.VideoTokenPrice = usdPerM
+	task.PrivateData.BillingContext.VideoTokenTier = "1080p"
+	task.PrivateData.BillingContext.GroupRatio = 1
+
+	RecalculateTaskQuotaByTokens(ctx, task, actualTokens)
+
+	assert.Equal(t, actualQuota, task.Quota)
+	assert.Equal(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
+	log := getLastLog(t)
+	require.NotNil(t, log)
+	assert.Equal(t, model.LogTypeRefund, log.Type)
+	assert.Equal(t, preConsumed-actualQuota, log.Quota)
+}
+
 func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {
 	truncate(t)
 	ctx := context.Background()

@@ -488,6 +488,10 @@ func updateVideoSingleTask(ctx context.Context, adaptor TaskPollingAdaptor, ch *
 		taskResult.Progress = t.Progress
 		taskResult.Reason = t.FailReason
 		task.Data = t.Data
+		taskResult.TotalTokens = relaycommon.ParseVideoTotalTokens(t.Data)
+		if taskResult.TotalTokens == 0 {
+			taskResult.TotalTokens = relaycommon.ParseVideoTotalTokens(responseBody)
+		}
 	} else if taskResult, err = adaptor.ParseTaskResult(responseBody); err != nil {
 		return fmt.Errorf("parseTaskResult failed for task %s: %w", taskId, err)
 	}

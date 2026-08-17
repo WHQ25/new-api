@@ -32,8 +32,10 @@ import {
 import { parseTags } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
 import { formatPrice, formatRequestPrice } from '../lib/price'
+import { isVideoTokenPricingModel } from '../lib/video-token-price'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
+import { VideoTokenPriceSummary } from './video-token-pricing'
 import { ModelPerfBadge, type ModelPerfBadgeData } from './model-perf-badge'
 
 export interface ModelCardProps {
@@ -92,7 +94,18 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
   }
 
   let priceSummary: ReactNode
-  if (dynamicSummary) {
+  if (isVideoTokenPricingModel(props.model)) {
+    priceSummary = (
+      <VideoTokenPriceSummary
+        model={props.model}
+        tokenUnit={tokenUnit}
+        showRechargePrice={showRechargePrice}
+        priceRate={priceRate}
+        usdExchangeRate={usdExchangeRate}
+        selectedGroup={props.selectedGroup}
+      />
+    )
+  } else if (dynamicSummary) {
     if (dynamicSummary.isSpecialExpression) {
       priceSummary = (
         <span className='min-w-0'>

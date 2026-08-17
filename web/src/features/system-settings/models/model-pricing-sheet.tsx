@@ -67,8 +67,10 @@ import {
   EMPTY_LANE_ENABLED,
   EMPTY_LANE_PRICES,
   buildPreviewRows,
+  countVideoTokenPrices,
   createInitialLaneState,
   createModelPricingSchema,
+  emptyVideoTokenPriceTable,
   hasValue,
   laneConfigs,
   numericDraftRegex,
@@ -78,8 +80,9 @@ import {
   type ModelPricingFormValues,
   type ModelRatioData,
   type PricingMode,
+  type VideoTokenPriceTable,
 } from './model-pricing-core'
-import { PriceInput, PriceLane } from './model-pricing-inputs'
+import { PriceInput, PriceLane, VideoTokenPriceGrid } from './model-pricing-inputs'
 import { formatPricingNumber } from './pricing-format'
 import { TieredPricingEditor } from './tiered-pricing-editor'
 
@@ -155,6 +158,9 @@ export const ModelPricingEditorPanel = forwardRef<
   })
   const [billingExpr, setBillingExpr] = useState('')
   const [requestRuleExpr, setRequestRuleExpr] = useState('')
+  const [videoTokenPrice, setVideoTokenPrice] = useState<VideoTokenPriceTable>(
+    emptyVideoTokenPriceTable()
+  )
   const [editorReloadToken, setEditorReloadToken] = useState(0)
   const isEditMode = !!editData
 
@@ -188,15 +194,21 @@ export const ModelPricingEditorPanel = forwardRef<
         audioRatio: editData.audioRatio || '',
         audioCompletionRatio: editData.audioCompletionRatio || '',
       })
-      setPricingMode(
-        editData.billingMode === 'tiered_expr'
-          ? 'tiered_expr'
-          : editData.price
-            ? 'per-request'
-            : 'per-token'
-      )
+      let nextMode: PricingMode = 'per-token'
+      if (
+        editData.billingMode === 'tiered_expr' ||
+        editData.billingMode === 'video_token'
+      ) {
+        nextMode = editData.billingMode
+      } else if (editData.price) {
+        nextMode = 'per-request'
+      }
+      setPricingMode(nextMode)
       setBillingExpr(editData.billingExpr || '')
       setRequestRuleExpr(editData.requestRuleExpr || '')
+      setVideoTokenPrice(
+        editData.videoTokenPrice || emptyVideoTokenPriceTable()
+      )
     } else {
       form.reset({
         name: '',
@@ -212,6 +224,7 @@ export const ModelPricingEditorPanel = forwardRef<
       setPricingMode('per-token')
       setBillingExpr('')
       setRequestRuleExpr('')
+      setVideoTokenPrice(emptyVideoTokenPriceTable())
     }
 
     setPromptPrice(nextLaneState.promptPrice)
@@ -407,8 +420,20 @@ export const ModelPricingEditorPanel = forwardRef<
       nextWarnings.push(t('Audio output price requires an audio input price.'))
     }
 
+    if (pricingMode === 'video_token' && countVideoTokenPrices(videoTokenPrice) === 0) {
+      nextWarnings.push(t('Fill at least one video tier price before saving.'))
+    }
+
     return nextWarnings
-  }, [editData, laneEnabled, lanePrices, pricingMode, promptPrice, t])
+  }, [
+    editData,
+    laneEnabled,
+    lanePrices,
+    pricingMode,
+    promptPrice,
+    t,
+    videoTokenPrice,
+  ])
 
   const validatePricingValues = useCallback(() => {
     if (
@@ -435,8 +460,15 @@ export const ModelPricingEditorPanel = forwardRef<
       return false
     }
 
+    if (pricingMode === 'video_token' && countVideoTokenPrices(videoTokenPrice) === 0) {
+      form.setError('name', {
+        message: t('Fill at least one video tier price before saving.'),
+      })
+      return false
+    }
+
     return true
-  }, [form, laneEnabled, lanePrices, pricingMode, promptPrice, t])
+  }, [form, laneEnabled, lanePrices, pricingMode, promptPrice, t, videoTokenPrice])
 
   const buildSubmitData = useCallback(
     (values: ModelPricingFormValues) => {
@@ -458,9 +490,13 @@ export const ModelPricingEditorPanel = forwardRef<
         data.requestRuleExpr = requestRuleExpr
       }
 
+      if (pricingMode === 'video_token') {
+        data.videoTokenPrice = videoTokenPrice
+      }
+
       return data
     },
-    [billingExpr, pricingMode, requestRuleExpr]
+    [billingExpr, pricingMode, requestRuleExpr, videoTokenPrice]
   )
 
   useImperativeHandle(
@@ -544,7 +580,7 @@ export const ModelPricingEditorPanel = forwardRef<
                   onValueChange={handleModeChange}
                   className='gap-4'
                 >
-                  <TabsList className='grid w-full grid-cols-3'>
+                  <TabsList className='grid w-full grid-cols-2 sm:grid-cols-4'>
                     <TabsTrigger value='per-token'>
                       {t('Per-token')}
                     </TabsTrigger>
@@ -553,6 +589,9 @@ export const ModelPricingEditorPanel = forwardRef<
                     </TabsTrigger>
                     <TabsTrigger value='tiered_expr'>
                       {t('Expression')}
+                    </TabsTrigger>
+                    <TabsTrigger value='video_token'>
+                      {t('Video tiers')}
                     </TabsTrigger>
                   </TabsList>
 
@@ -649,6 +688,22 @@ export const ModelPricingEditorPanel = forwardRef<
                         onBillingExprChange={setBillingExpr}
                         onRequestRuleExprChange={setRequestRuleExpr}
                       />
+                    </FieldGroup>
+                  </TabsContent>
+                  <TabsContent value='video_token' className='pt-0'>
+                    <FieldGroup className='gap-5'>
+                      <Field>
+                        <FieldLabel>{t('Video tiers')}</FieldLabel>
+                        <FieldDescription>
+                          {t(
+                            'USD price per 1M tokens for each resolution and input type.'
+                          )}
+                        </FieldDescription>
+                        <VideoTokenPriceGrid
+                          value={videoTokenPrice}
+                          onChange={setVideoTokenPrice}
+                        />
+                      </Field>
                     </FieldGroup>
                   </TabsContent>
                 </Tabs>
