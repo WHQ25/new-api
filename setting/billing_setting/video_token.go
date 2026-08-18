@@ -1,11 +1,16 @@
 package billing_setting
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/samber/lo"
 )
+
+// ErrVideoTokenResolutionRequired is returned when a video_token request has no
+// structured resolution. Prompt flags such as "--resolution 480p" are ignored.
+var ErrVideoTokenResolutionRequired = errors.New("metadata.resolution is required")
 
 const (
 	VideoTokenTier480p  = "480p"
@@ -37,10 +42,12 @@ func VideoTokenPriceKey(resolution string, hasVideo bool) (string, error) {
 }
 
 // ParseVideoTokenTier maps known resolution labels onto the four tariff rows.
-// Empty/missing resolution defaults to 720p. Unknown labels are rejected.
+// Empty/missing resolution is rejected so billing cannot silently default to 720p.
 func ParseVideoTokenTier(resolution string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(resolution)) {
-	case "", "720p", "720", "hd":
+	case "":
+		return "", ErrVideoTokenResolutionRequired
+	case "720p", "720", "hd":
 		return VideoTokenTier720p, nil
 	case "480p", "480", "sd":
 		return VideoTokenTier480p, nil

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -83,4 +84,18 @@ func TestEstimateVideoTokenBillingReadsRequest(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported video resolution")
+
+	_, err = estimateVideoTokenBilling("seedance-test", relaycommon.TaskSubmitReq{
+		Duration: 5,
+		Prompt:   "A small orange cat walks slowly --duration 5 --ratio 16:9 --resolution 480p",
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, billing_setting.ErrVideoTokenResolutionRequired)
+
+	_, err = estimateVideoTokenBilling("seedance-test", relaycommon.TaskSubmitReq{
+		Duration: 5,
+		Metadata: map[string]interface{}{},
+	})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, billing_setting.ErrVideoTokenResolutionRequired)
 }

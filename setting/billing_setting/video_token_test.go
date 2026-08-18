@@ -45,4 +45,8 @@ func TestLookupVideoTokenPrice(t *testing.T) {
 
 	_, _, err = LookupVideoTokenPrice("missing", "720p", false)
 	require.Error(t, err)
+
+	_, _, err = LookupVideoTokenPrice("seedance-2", "", false)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrVideoTokenResolutionRequired)
 }

@@ -185,7 +185,11 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	if videoTokenBilling {
 		priceData, priceErr := helper.ModelPriceHelperVideoToken(c, info)
 		if priceErr != nil {
-			return nil, service.TaskErrorWrapperLocal(priceErr, "video_token_price_error", http.StatusBadRequest)
+			code := "video_token_price_error"
+			if errors.Is(priceErr, billing_setting.ErrVideoTokenResolutionRequired) {
+				code = "missing_resolution"
+			}
+			return nil, service.TaskErrorWrapperLocal(priceErr, code, http.StatusBadRequest)
 		}
 		info.PriceData = priceData
 	} else {
