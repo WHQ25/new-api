@@ -17,12 +17,21 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// attachQuotaSaturationToOther nests a quota saturation marker under
-// other.admin_info.quota_saturation. Nesting under admin_info makes it
-// admin-only for free, since model.formatUserLogs strips the whole admin_info
-// object for non-admin viewers. Creates admin_info if absent. No-op when the
-// clamp is nil (the common case: no saturation happened).
-func attachQuotaSaturationToOther(other map[string]interface{}, clamp *common.QuotaClamp) {
+// Saturation markers nested under other.admin_info. Distinct kinds get distinct
+// keys so a settlement that saturated twice (an out-of-range upstream token
+// count *and* a quota conversion overflow) records both instead of one
+// silently overwriting the other.
+const (
+	quotaSaturationKey      = "quota_saturation"
+	videoTokenSaturationKey = "video_token_saturation"
+)
+
+// attachSaturationToOther nests a saturation marker under other.admin_info.
+// Nesting under admin_info makes it admin-only for free, since
+// model.formatUserLogs strips the whole admin_info object for non-admin
+// viewers. Creates admin_info if absent. No-op when the clamp is nil (the
+// common case: no saturation happened).
+func attachSaturationToOther(other map[string]interface{}, key string, clamp *common.QuotaClamp) {
 	if clamp == nil || other == nil {
 		return
 	}
@@ -31,7 +40,7 @@ func attachQuotaSaturationToOther(other map[string]interface{}, clamp *common.Qu
 		adminInfo = map[string]interface{}{}
 		other["admin_info"] = adminInfo
 	}
-	adminInfo["quota_saturation"] = clamp.AuditMap()
+	adminInfo[key] = clamp.AuditMap()
 }
 
 // attachQuotaSaturation records the request's quota clamp (if any) onto the
@@ -45,7 +54,7 @@ func attachQuotaSaturation(ctx *gin.Context, relayInfo *relaycommon.RelayInfo, o
 	if clamp == nil {
 		return
 	}
-	attachQuotaSaturationToOther(other, clamp)
+	attachSaturationToOther(other, quotaSaturationKey, clamp)
 	logger.LogWarn(ctx, fmt.Sprintf("quota saturation on consume log: op=%s kind=%s original=%g clamped=%d user=%d model=%s",
 		clamp.Op, clamp.Kind, clamp.Original, clamp.Clamped, relayInfo.UserId, relayInfo.OriginModelName))
 }

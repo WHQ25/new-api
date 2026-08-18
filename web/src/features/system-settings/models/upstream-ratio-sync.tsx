@@ -51,7 +51,10 @@ import {
 } from './constants'
 import {
   NUMERIC_SYNC_FIELDS,
+  optionKeyBySyncField,
+  parseVideoTokenPriceTable,
   RATIO_SYNC_FIELDS,
+  type SyncOptionValue,
   applyResolutionRemovalPlan,
   applyResolutionSelection,
   applyResolutionSelections,
@@ -94,18 +97,6 @@ function getDefaultEndpointForChannel(channel: UpstreamChannel): string {
   if (channel.id === OFFICIAL_CHANNEL_ID) return OFFICIAL_CHANNEL_ENDPOINT
   if (channel.type === OPENROUTER_CHANNEL_TYPE) return OPENROUTER_ENDPOINT
   return DEFAULT_ENDPOINT
-}
-
-function optionKeyBySyncField(ratioType: string): string {
-  const explicit: Record<string, string> = {
-    billing_mode: 'billing_setting.billing_mode',
-    billing_expr: 'billing_setting.billing_expr',
-  }
-  if (explicit[ratioType]) return explicit[ratioType]
-  return ratioType
-    .split('_')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
-    .join('')
 }
 
 function parseJsonRecord<T>(raw: string | undefined | null): Record<string, T> {
@@ -308,6 +299,9 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
       'billing_setting.billing_expr': parseJsonRecord<string>(
         modelRatios['billing_setting.billing_expr']
       ),
+      'billing_setting.video_token_price': parseJsonRecord<
+        Record<string, number>
+      >(modelRatios['billing_setting.video_token_price']),
     }
   }, [modelRatios])
 
@@ -334,7 +328,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
 
   const performSync = useCallback(
     async (currentRatios: ParsedRatios): Promise<boolean> => {
-      const finalRatios: Record<string, Record<string, number | string>> = {
+      const finalRatios: Record<string, Record<string, SyncOptionValue>> = {
         ModelRatio: { ...currentRatios.ModelRatio },
         CompletionRatio: { ...currentRatios.CompletionRatio },
         CacheRatio: { ...currentRatios.CacheRatio },
@@ -343,6 +337,9 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         AudioRatio: { ...currentRatios.AudioRatio },
         AudioCompletionRatio: { ...currentRatios.AudioCompletionRatio },
         ModelPrice: { ...currentRatios.ModelPrice },
+        'billing_setting.video_token_price': {
+          ...currentRatios['billing_setting.video_token_price'],
+        },
         'billing_setting.billing_mode': {
           ...currentRatios['billing_setting.billing_mode'],
         },
@@ -350,6 +347,8 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
           ...currentRatios['billing_setting.billing_expr'],
         },
       }
+
+      const invalidVideoTokenPriceModels: string[] = []
 
       Object.entries(resolutions).forEach(([model, ratios]) => {
         const selectedTypes = Object.keys(ratios)
@@ -370,14 +369,40 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         if (hasRatio) {
           delete finalRatios.ModelPrice[model]
         }
+        if (selectedTypes.includes('video_token_price')) {
+          // Video-token billing prices from the tier table alone; leaving the
+          // old ratio/price entries behind would only be misleading config.
+          delete finalRatios.ModelPrice[model]
+          RATIO_SYNC_FIELDS.forEach((rt) => {
+            delete finalRatios[optionKeyBySyncField(rt)][model]
+          })
+        }
 
         Object.entries(ratios).forEach(([ratioType, value]) => {
           const optionKey = optionKeyBySyncField(ratioType)
+          if (ratioType === 'video_token_price') {
+            const table = parseVideoTokenPriceTable(value)
+            if (!table) {
+              invalidVideoTokenPriceModels.push(model)
+              return
+            }
+            finalRatios[optionKey][model] = table
+            return
+          }
           finalRatios[optionKey][model] = NUMERIC_SYNC_FIELDS.has(ratioType)
             ? Number(value)
             : value
         })
       })
+
+      if (invalidVideoTokenPriceModels.length > 0) {
+        toast.error(
+          t('Invalid video tier prices from upstream: {{models}}', {
+            models: invalidVideoTokenPriceModels.join(', '),
+          })
+        )
+        return false
+      }
 
       const updates = Object.entries(finalRatios).map(([key, value]) => ({
         key,
@@ -391,7 +416,7 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         })
       })
     },
-    [resolutions, syncMutate]
+    [resolutions, syncMutate, t]
   )
 
   const findSourceChannel = (

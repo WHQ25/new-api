@@ -215,7 +215,10 @@ export function UsageLogsTable({ logCategory }: UsageLogsTableProps) {
           const other = parseLogOther(
             ((row.original as Record<string, unknown>).other as string) ?? ''
           )
-          if (other?.admin_info?.quota_saturation) {
+          if (
+            other?.admin_info?.quota_saturation ||
+            other?.admin_info?.video_token_saturation
+          ) {
             tintClass = quotaSaturationRowTint
           }
         }

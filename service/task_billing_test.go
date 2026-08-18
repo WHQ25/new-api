@@ -787,7 +787,7 @@ func TestRecalculate_PositiveDelta(t *testing.T) {
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
+	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment", taskSettleAudit{})
 
 	// User quota should decrease by the delta (1000 additional charge)
 	assert.Equal(t, initQuota-(actualQuota-preConsumed), getUserQuota(t, userID))
@@ -826,7 +826,7 @@ func TestRecalculate_NegativeDelta(t *testing.T) {
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment")
+	RecalculateTaskQuota(ctx, task, actualQuota, "adaptor adjustment", taskSettleAudit{})
 
 	// User quota should increase by abs(delta) = 2000 (refund overpayment)
 	assert.Equal(t, initQuota+(preConsumed-actualQuota), getUserQuota(t, userID))
@@ -860,7 +860,7 @@ func TestRecalculate_ZeroDelta(t *testing.T) {
 
 	task := makeTask(userID, 0, preConsumed, 0, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, preConsumed, "exact match")
+	RecalculateTaskQuota(ctx, task, preConsumed, "exact match", taskSettleAudit{})
 
 	// No change to user quota
 	assert.Equal(t, initQuota, getUserQuota(t, userID))
@@ -880,7 +880,7 @@ func TestRecalculate_ActualQuotaZero(t *testing.T) {
 
 	task := makeTask(userID, 0, 5000, 0, BillingSourceWallet, 0)
 
-	RecalculateTaskQuota(ctx, task, 0, "zero actual")
+	RecalculateTaskQuota(ctx, task, 0, "zero actual", taskSettleAudit{})
 
 	// No change (early return)
 	assert.Equal(t, initQuota, getUserQuota(t, userID))
@@ -939,7 +939,7 @@ func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {
 
 	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceSubscription, subID)
 
-	RecalculateTaskQuota(ctx, task, actualQuota, "subscription over-charge")
+	RecalculateTaskQuota(ctx, task, actualQuota, "subscription over-charge", taskSettleAudit{})
 
 	// Subscription used should decrease by delta (refund 3000)
 	assert.Equal(t, subUsed-int64(preConsumed-actualQuota), getSubscriptionUsed(t, subID))
@@ -1006,7 +1006,7 @@ func simulatePollBilling(ctx context.Context, task *model.Task, newStatus model.
 	}
 
 	if shouldSettle && actualQuota > 0 {
-		RecalculateTaskQuota(ctx, task, actualQuota, "test settle")
+		RecalculateTaskQuota(ctx, task, actualQuota, "test settle", taskSettleAudit{})
 	}
 	if shouldRefund {
 		RefundTaskQuota(ctx, task, task.FailReason)
@@ -1259,4 +1259,55 @@ func TestSettle_NonPerCallBilling_AppliesAdaptorAdjustment(t *testing.T) {
 	log := getLastLog(t)
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
+}
+
+// An upstream that reports an absurd token count must be clamped to the billing
+// ceiling, and the clamp must survive into the admin-only audit trail — a large
+// settlement nobody can explain is exactly what the saturation invariant exists
+// to prevent.
+func TestRecalculateTaskQuotaByTokens_OverCeilingTokensAreClampedAndAudited(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 22, 22, 22
+	const initQuota, tokenRemain = 5_000_000_0, 5_000_000_0
+	const preConsumed = 1000
+	// The realistic worst case: ParseVideoTotalTokens saturates an absurd
+	// upstream number at math.MaxInt32, which is still above the billing ceiling.
+	const reportedTokens = math.MaxInt32
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-video-clamp", tokenRemain)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, tokenID, preConsumed, 1)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.BillingMode = "video_token"
+	task.PrivateData.BillingContext.VideoTokenPrice = 7.0
+	task.PrivateData.BillingContext.VideoTokenTier = "1080p"
+	task.PrivateData.BillingContext.GroupRatio = 1
+
+	RecalculateTaskQuotaByTokens(ctx, task, reportedTokens)
+
+	log := getLastLog(t)
+	require.NotNil(t, log)
+
+	var other map[string]interface{}
+	require.NoError(t, common.UnmarshalJsonStr(log.Other, &other))
+	assert.Contains(t, log.Content, "tokens=1399680000", "billed on the clamped count")
+	assert.Contains(t, log.Content, "上游原始上报=2147483647", "raw upstream count stays on the record")
+
+	adminInfo, ok := other["admin_info"].(map[string]interface{})
+	require.True(t, ok, "saturation must be nested under admin_info so non-admins never see it")
+
+	tokenClamp, ok := adminInfo[videoTokenSaturationKey].(map[string]interface{})
+	require.True(t, ok, "token clamp must be audited")
+	assert.EqualValues(t, reportedTokens, tokenClamp["original"])
+	assert.EqualValues(t, relaycommon.MaxVideoTotalTokens, tokenClamp["clamped"])
+
+	// $7/M on 1.4e9 tokens overflows int32, so the quota conversion saturates
+	// too. The two markers occupy different keys and must both survive.
+	quotaClamp, ok := adminInfo[quotaSaturationKey].(map[string]interface{})
+	require.True(t, ok, "quota clamp must not be overwritten by the token clamp")
+	assert.EqualValues(t, common.QuotaClampOverflow, quotaClamp["kind"])
 }

@@ -85,9 +85,9 @@ import type {
 } from '../types'
 import { DynamicPricingBreakdown } from './dynamic-pricing-breakdown'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
-import { VideoTokenPriceGrid } from './video-token-pricing'
 import { ModelDetailsApi } from './model-details-api'
 import { ModelDetailsPerformance } from './model-details-performance'
+import { VideoTokenPriceGrid } from './video-token-pricing'
 
 // ----------------------------------------------------------------------------
 // Local UI helpers

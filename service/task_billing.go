@@ -220,7 +220,15 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 // actualQuota 是任务完成后的实际应扣额度，与预扣额度 (task.Quota) 做差额结算。
 // reason 用于日志记录（例如 "token重算" 或 "adaptor调整"）。
 // clamps 可选：若计算 actualQuota 时发生额度饱和，将其记入日志 admin_info（仅管理员可见）。
-func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, clamps ...*common.QuotaClamp) {
+// taskSettleAudit carries the saturation markers recorded on a settlement log.
+// Named fields rather than a clamp slice, because the two kinds land in
+// different admin_info keys and must never overwrite each other.
+type taskSettleAudit struct {
+	QuotaClamp      *common.QuotaClamp // quota conversion fell outside int32
+	VideoTokenClamp *common.QuotaClamp // upstream token count exceeded the billing ceiling
+}
+
+func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, audit taskSettleAudit) {
 	if actualQuota <= 0 {
 		return
 	}
@@ -228,6 +236,13 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	quotaDelta := actualQuota - preConsumedQuota
 
 	if quotaDelta == 0 {
+		// 差额为 0 时不写账单记录，饱和标记就没有落点。这种组合本身就是异常
+		// （能触发饱和的量级不可能刚好等于预扣），所以退回后端告警，不为了留痕
+		// 而制造一条 0 额度的消费日志。
+		if audit.QuotaClamp != nil || audit.VideoTokenClamp != nil {
+			logger.LogWarn(ctx, fmt.Sprintf("任务 %s 结算发生饱和但差额为 0，无账单记录可附加标记（%s）",
+				task.TaskID, reason))
+		}
 		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 预扣费准确（%s，%s）",
 			task.TaskID, logger.LogQuota(actualQuota), reason))
 		return
@@ -272,9 +287,8 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	other["task_id"] = task.TaskID
 	other["pre_consumed_quota"] = preConsumedQuota
 	other["actual_quota"] = actualQuota
-	for _, clamp := range clamps {
-		attachQuotaSaturationToOther(other, clamp)
-	}
+	attachSaturationToOther(other, quotaSaturationKey, audit.QuotaClamp)
+	attachSaturationToOther(other, videoTokenSaturationKey, audit.VideoTokenClamp)
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
 		UserId:    task.UserId,
 		LogType:   logType,
@@ -297,6 +311,25 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		return
 	}
 
+	// 上游/级联返回的 token 数是外部输入：解析层只做表示安全收敛，业务上界在这里
+	// 唯一强制。一次正常任务永远不会触到这个上界，所以收敛必须留痕——后端告警一
+	// 条、结算原因带上原始上报值、管理员日志里落一个独立的饱和标记，避免出现一
+	// 笔没人能解释的大额结算。
+	audit := taskSettleAudit{}
+	tokenClampNote := ""
+	if totalTokens > relaycommon.MaxVideoTotalTokens {
+		audit.VideoTokenClamp = &common.QuotaClamp{
+			Op:       "VideoTotalTokens",
+			Kind:     common.QuotaClampOverflow,
+			Original: float64(totalTokens),
+			Clamped:  relaycommon.MaxVideoTotalTokens,
+		}
+		logger.LogWarn(ctx, fmt.Sprintf("任务 %s 上游上报 token 数超出计费上界，已收敛：original=%d clamped=%d",
+			task.TaskID, totalTokens, relaycommon.MaxVideoTotalTokens))
+		tokenClampNote = fmt.Sprintf(", 上游原始上报=%d(已收敛)", totalTokens)
+		totalTokens = relaycommon.MaxVideoTotalTokens
+	}
+
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.BillingMode == billing_setting.BillingModeVideoToken && bc.VideoTokenPrice > 0 {
 		groupRatio := bc.GroupRatio
 		if groupRatio != groupRatio || groupRatio < 0 {
@@ -304,8 +337,9 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 			return
 		}
 		actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) / 1_000_000 * bc.VideoTokenPrice * common.QuotaPerUnit * groupRatio)
-		reason := fmt.Sprintf("video token重算：tokens=%d, tier=%s, usdPerM=%.4f, groupRatio=%.2f", totalTokens, bc.VideoTokenTier, bc.VideoTokenPrice, groupRatio)
-		RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
+		audit.QuotaClamp = clamp
+		reason := fmt.Sprintf("video token重算：tokens=%d, tier=%s, usdPerM=%.4f, groupRatio=%.2f%s", totalTokens, bc.VideoTokenTier, bc.VideoTokenPrice, groupRatio, tokenClampNote)
+		RecalculateTaskQuota(ctx, task, actualQuota, reason, audit)
 		return
 	}
 
@@ -348,7 +382,8 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 
 	// 计算实际应扣费额度: totalTokens * modelRatio * groupRatio * otherMultiplier（饱和转换，防止溢出成负数）
 	actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) * modelRatio * finalGroupRatio * otherMultiplier)
+	audit.QuotaClamp = clamp
 
-	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f", totalTokens, modelRatio, finalGroupRatio, otherMultiplier)
-	RecalculateTaskQuota(ctx, task, actualQuota, reason, clamp)
+	reason := fmt.Sprintf("token重算：tokens=%d, modelRatio=%.2f, groupRatio=%.2f, otherMultiplier=%.4f%s", totalTokens, modelRatio, finalGroupRatio, otherMultiplier, tokenClampNote)
+	RecalculateTaskQuota(ctx, task, actualQuota, reason, audit)
 }

@@ -35,8 +35,8 @@ import { formatPrice, formatRequestPrice } from '../lib/price'
 import { isVideoTokenPricingModel } from '../lib/video-token-price'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
-import { VideoTokenPriceSummary } from './video-token-pricing'
 import { ModelPerfBadge, type ModelPerfBadgeData } from './model-perf-badge'
+import { VideoTokenPriceSummary } from './video-token-pricing'
 
 export interface ModelCardProps {
   model: PricingModel

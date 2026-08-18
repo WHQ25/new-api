@@ -82,7 +82,11 @@ import {
   type PricingMode,
   type VideoTokenPriceTable,
 } from './model-pricing-core'
-import { PriceInput, PriceLane, VideoTokenPriceGrid } from './model-pricing-inputs'
+import {
+  PriceInput,
+  PriceLane,
+  VideoTokenPriceGrid,
+} from './model-pricing-inputs'
 import { formatPricingNumber } from './pricing-format'
 import { TieredPricingEditor } from './tiered-pricing-editor'
 
@@ -420,7 +424,10 @@ export const ModelPricingEditorPanel = forwardRef<
       nextWarnings.push(t('Audio output price requires an audio input price.'))
     }
 
-    if (pricingMode === 'video_token' && countVideoTokenPrices(videoTokenPrice) === 0) {
+    if (
+      pricingMode === 'video_token' &&
+      countVideoTokenPrices(videoTokenPrice) === 0
+    ) {
       nextWarnings.push(t('Fill at least one video tier price before saving.'))
     }
 
@@ -460,7 +467,10 @@ export const ModelPricingEditorPanel = forwardRef<
       return false
     }
 
-    if (pricingMode === 'video_token' && countVideoTokenPrices(videoTokenPrice) === 0) {
+    if (
+      pricingMode === 'video_token' &&
+      countVideoTokenPrices(videoTokenPrice) === 0
+    ) {
       form.setError('name', {
         message: t('Fill at least one video tier price before saving.'),
       })
@@ -468,7 +478,15 @@ export const ModelPricingEditorPanel = forwardRef<
     }
 
     return true
-  }, [form, laneEnabled, lanePrices, pricingMode, promptPrice, t, videoTokenPrice])
+  }, [
+    form,
+    laneEnabled,
+    lanePrices,
+    pricingMode,
+    promptPrice,
+    t,
+    videoTokenPrice,
+  ])
 
   const buildSubmitData = useCallback(
     (values: ModelPricingFormValues) => {

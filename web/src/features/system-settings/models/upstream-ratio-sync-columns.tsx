@@ -39,6 +39,7 @@ import {
   isSelectedResolutionValue,
   type ModelRow,
   type ResolutionsMap,
+  formatSyncValueLabel,
 } from './upstream-ratio-sync-helpers'
 import type { UpstreamBulkSelectState } from './upstream-ratio-sync-table'
 
@@ -138,7 +139,11 @@ export function useUpstreamRatioSyncColumns(
                           <TooltipTrigger
                             render={
                               <StatusBadge
-                                label={String(current)}
+                                label={formatSyncValueLabel(
+                                  ratioType,
+                                  current,
+                                  t
+                                )}
                                 variant='info'
                                 size='sm'
                                 className='max-w-[160px] truncate font-mono'
@@ -238,6 +243,7 @@ export function useUpstreamRatioSyncColumns(
                     />
                     <div className='min-w-0 flex-1'>
                       {renderUpstreamValue({
+                        ratioType,
                         upstreamVal,
                         isAvailable: isVisibleForSource,
                         isConfident,
@@ -285,6 +291,7 @@ export function useUpstreamRatioSyncColumns(
 }
 
 type RenderUpstreamValueArgs = {
+  ratioType: RatioType
   upstreamVal: number | string | 'same' | null | undefined
   isAvailable: boolean
   isConfident: boolean
@@ -296,8 +303,15 @@ type RenderUpstreamValueArgs = {
 }
 
 function renderUpstreamValue(args: RenderUpstreamValueArgs) {
-  const { upstreamVal, isAvailable, isConfident, isSelected, isDisabled, t } =
-    args
+  const {
+    ratioType,
+    upstreamVal,
+    isAvailable,
+    isConfident,
+    isSelected,
+    isDisabled,
+    t,
+  } = args
 
   if (!isAvailable) {
     return (
@@ -328,6 +342,7 @@ function renderUpstreamValue(args: RenderUpstreamValueArgs) {
   }
 
   const text = String(upstreamVal)
+  const label = formatSyncValueLabel(ratioType, upstreamVal, t)
 
   return (
     <div className='flex h-full min-w-0 items-center gap-2'>
@@ -350,7 +365,7 @@ function renderUpstreamValue(args: RenderUpstreamValueArgs) {
               <span className='inline-block max-w-[240px] cursor-default truncate font-mono text-sm' />
             }
           >
-            {text}
+            {label}
           </TooltipTrigger>
           <TooltipContent>
             <p className='max-w-xs text-xs break-all'>{text}</p>

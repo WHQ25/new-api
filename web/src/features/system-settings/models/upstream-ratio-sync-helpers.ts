@@ -71,6 +71,7 @@ export const RATIO_SYNC_FIELDS: RatioType[] = [
 export const SYNC_FIELD_ORDER: RatioType[] = [
   ...RATIO_SYNC_FIELDS,
   'model_price',
+  'video_token_price',
   'billing_mode',
   'billing_expr',
 ]
@@ -79,6 +80,51 @@ export const NUMERIC_SYNC_FIELDS = new Set<string>([
   ...RATIO_SYNC_FIELDS,
   'model_price',
 ])
+
+export type SyncOptionValue = number | string | Record<string, number>
+
+// Video tier tables travel through the sync API as canonical JSON strings so
+// they stay scalar selection values; they are decoded back into a table right
+// before being written to `billing_setting.video_token_price`.
+export function parseVideoTokenPriceTable(
+  value: number | string
+): Record<string, number> | null {
+  if (typeof value !== 'string') return null
+  let decoded: unknown
+  try {
+    decoded = JSON.parse(value)
+  } catch {
+    return null
+  }
+  if (
+    typeof decoded !== 'object' ||
+    decoded === null ||
+    Array.isArray(decoded)
+  ) {
+    return null
+  }
+  const table: Record<string, number> = {}
+  for (const [tier, price] of Object.entries(decoded)) {
+    if (typeof price !== 'number' || !Number.isFinite(price)) return null
+    table[tier] = price
+  }
+  return Object.keys(table).length > 0 ? table : null
+}
+
+// Maps a sync field onto the system option that stores it. Billing settings live
+// under explicit dotted option keys; ratio fields use the PascalCase option name.
+export function optionKeyBySyncField(ratioType: string): string {
+  const explicit: Record<string, string> = {
+    billing_mode: 'billing_setting.billing_mode',
+    billing_expr: 'billing_setting.billing_expr',
+    video_token_price: 'billing_setting.video_token_price',
+  }
+  if (explicit[ratioType]) return explicit[ratioType]
+  return ratioType
+    .split('_')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join('')
+}
 
 export function getSyncFieldLabel(
   ratioType: string,
@@ -148,11 +194,37 @@ export function getAlignedRatioTypes(
   return ordered.filter((ratioType) => visible.has(ratioType))
 }
 
+// Video tier tables arrive as canonical JSON strings, which are far too long to
+// read in a table cell. Show the tier count and leave the raw table to tooltips.
+export function formatSyncValueLabel(
+  ratioType: string,
+  value: number | string,
+  t: (key: string, options?: Record<string, unknown>) => string
+): string {
+  if (ratioType === 'video_token_price' && typeof value === 'string') {
+    try {
+      const table: unknown = JSON.parse(value)
+      if (table && typeof table === 'object' && !Array.isArray(table)) {
+        return t('{{tiers}} tier prices', {
+          tiers: Object.keys(table).length,
+        })
+      }
+    } catch {
+      // Fall through and show the raw value so bad data stays visible.
+    }
+  }
+  return String(value)
+}
+
 export function getBillingCategory(
   ratioType: string
 ): 'price' | 'ratio' | 'tiered' {
   if (ratioType === 'model_price') return 'price'
-  if (ratioType === 'billing_mode' || ratioType === 'billing_expr') {
+  if (
+    ratioType === 'billing_mode' ||
+    ratioType === 'billing_expr' ||
+    ratioType === 'video_token_price'
+  ) {
     return 'tiered'
   }
   return 'ratio'
@@ -266,13 +338,27 @@ function applyResolutionSelectionToDraft(
   if (category === 'tiered' && modelDiffs) {
     const modeVal = modelDiffs.billing_mode?.upstreams?.[selection.sourceName]
     const exprVal = modelDiffs.billing_expr?.upstreams?.[selection.sourceName]
-    if (modeVal !== undefined && modeVal !== null && modeVal !== 'same') {
-      newModelRes['billing_mode'] = modeVal
+    const videoPriceVal =
+      modelDiffs.video_token_price?.upstreams?.[selection.sourceName]
+    if (isSelectableUpstreamValue(modeVal)) {
+      newModelRes['billing_mode'] = modeVal as number | string
     } else if (finalType === 'billing_expr') {
       newModelRes['billing_mode'] = 'tiered_expr'
+    } else if (finalType === 'video_token_price') {
+      newModelRes['billing_mode'] = 'video_token'
     }
-    if (exprVal !== undefined && exprVal !== null && exprVal !== 'same') {
-      newModelRes['billing_expr'] = exprVal
+    if (isSelectableUpstreamValue(exprVal)) {
+      newModelRes['billing_expr'] = exprVal as number | string
+    }
+    // Video-token billing cannot price a request without its tier table, so the
+    // mode and the table are always selected together. A missing upstream value
+    // means the local table already matches (the backend refuses to advertise an
+    // unpriced video_token mode at all).
+    if (
+      newModelRes['billing_mode'] === 'video_token' &&
+      isSelectableUpstreamValue(videoPriceVal)
+    ) {
+      newModelRes['video_token_price'] = videoPriceVal as number | string
     }
   }
 }
@@ -396,7 +482,19 @@ export function applyResolutionRemovalPlan(
     ratioTypes.forEach((ratioType) => {
       delete draft[ratioType]
       if (ratioType === 'billing_expr') delete draft['billing_mode']
-      if (ratioType === 'billing_mode') delete draft['billing_expr']
+      if (ratioType === 'billing_mode') {
+        delete draft['billing_expr']
+        delete draft['video_token_price']
+      }
+      // Dropping the tier table must drop the mode with it: syncing
+      // video_token without a price table leaves the model unable to price any
+      // request.
+      if (
+        ratioType === 'video_token_price' &&
+        draft['billing_mode'] === 'video_token'
+      ) {
+        delete draft['billing_mode']
+      }
     })
     if (Object.keys(draft).length === 0) {
       delete next[model]

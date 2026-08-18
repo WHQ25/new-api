@@ -22,7 +22,13 @@ func TestParseVideoTotalTokens(t *testing.T) {
 
 	assert.Zero(t, ParseVideoTotalTokens([]byte(`{"usage":{"total_tokens":-1}}`)))
 	assert.Zero(t, ParseVideoTotalTokens([]byte(`{"usage":{"total_tokens":"NaN"}}`)))
-	assert.Equal(t, MaxVideoTotalTokens, ParseVideoTotalTokens([]byte(`{"total_tokens":1e20}`)))
+
+	// Parsing saturates only for safe int representation. Values above the
+	// billing ceiling must survive to settlement, which is the layer that
+	// enforces MaxVideoTotalTokens and audits the clamp.
+	overCeiling := ParseVideoTotalTokens([]byte(`{"total_tokens":1e20}`))
+	assert.Equal(t, math.MaxInt32, overCeiling)
+	assert.Greater(t, overCeiling, MaxVideoTotalTokens)
 }
 
 func TestBoundedIntFromAny(t *testing.T) {

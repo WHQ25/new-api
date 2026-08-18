@@ -18,6 +18,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	relayconstant "github.com/QuantumNous/new-api/relay/constant"
 	"github.com/QuantumNous/new-api/relay/helper"
+	relaykitdto "github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/gin-gonic/gin"
@@ -419,7 +420,7 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 				taskResp = service.TaskErrorWrapper(err, "convert_to_openai_video_failed", http.StatusInternalServerError)
 				return
 			}
-			respBody = openAIVideoData
+			respBody = attachVideoTokenUsage(openAIVideoData, originTask)
 			return
 		}
 		taskResp = service.TaskErrorWrapperLocal(fmt.Errorf("not_implemented:%s", originTask.Platform), "not_implemented", http.StatusNotImplemented)
@@ -435,6 +436,30 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 		taskResp = service.TaskErrorWrapper(err, "marshal_response_failed", http.StatusInternalServerError)
 	}
 	return
+}
+
+// attachVideoTokenUsage republishes the provider-reported token count on the
+// public video response. Per-provider ConvertToOpenAIVideo implementations only
+// carry status and result URLs, so without this a cascading new-api downstream
+// can never settle on actual usage and stays on its pre-consume estimate.
+func attachVideoTokenUsage(videoBody []byte, originTask *model.Task) []byte {
+	totalTokens := relaycommon.ParseVideoTotalTokens(originTask.Data)
+	if totalTokens <= 0 {
+		return videoBody
+	}
+	var video relaykitdto.OpenAIVideo
+	if err := common.Unmarshal(videoBody, &video); err != nil {
+		return videoBody
+	}
+	if video.Usage != nil && video.Usage.TotalTokens > 0 {
+		return videoBody
+	}
+	video.Usage = &relaykitdto.OpenAIVideoUsage{TotalTokens: totalTokens}
+	merged, err := common.Marshal(video)
+	if err != nil {
+		return videoBody
+	}
+	return merged
 }
 
 // tryRealtimeFetch 尝试从上游实时拉取 Gemini/Vertex 任务状态。

@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,11 +53,20 @@ func nearlyEqual(a, b float64) bool {
 	return b-a < floatEpsilon
 }
 
+// valuesEqual compares two sync values. Floats use epsilon comparison; values
+// that Go cannot compare with == (maps/slices arriving from a malformed or
+// nested upstream payload) fall back to canonical JSON so diffing never panics.
 func valuesEqual(a, b interface{}) bool {
 	af, aok := a.(float64)
 	bf, bok := b.(float64)
 	if aok && bok {
 		return nearlyEqual(af, bf)
+	}
+	ta, tb := reflect.TypeOf(a), reflect.TypeOf(b)
+	if (ta != nil && !ta.Comparable()) || (tb != nil && !tb.Comparable()) {
+		encodedA, errA := common.Marshal(a)
+		encodedB, errB := common.Marshal(b)
+		return errA == nil && errB == nil && bytes.Equal(encodedA, encodedB)
 	}
 	return a == b
 }
@@ -100,8 +110,71 @@ func valueMap(value any) map[string]any {
 		return lo.MapValues(typed, func(value float64, _ string) any { return value })
 	case map[string]string:
 		return lo.MapValues(typed, func(value string, _ string) any { return value })
+	case map[string]map[string]float64:
+		return lo.MapValues(typed, func(value map[string]float64, _ string) any { return value })
 	default:
 		return nil
+	}
+}
+
+// videoTokenPriceTable normalizes a per-model video tier price table from any
+// shape it can reach the sync layer in (typed local config or decoded upstream
+// JSON) into finite prices. Returns nil when nothing usable is present.
+func videoTokenPriceTable(value any) map[string]float64 {
+	var raw map[string]any
+	switch typed := value.(type) {
+	case map[string]float64:
+		raw = lo.MapValues(typed, func(price float64, _ string) any { return price })
+	case map[string]any:
+		raw = typed
+	default:
+		return nil
+	}
+	table := make(map[string]float64, len(raw))
+	for tier, rawPrice := range raw {
+		price, ok := asFloat64(rawPrice)
+		if !ok || math.IsNaN(price) || math.IsInf(price, 0) {
+			continue
+		}
+		table[tier] = price
+	}
+	if len(table) == 0 {
+		return nil
+	}
+	return table
+}
+
+// dropUnpricedVideoTokenMode removes a video_token billing mode that an upstream
+// advertises without a usable tier price table. Syncing the mode alone would
+// switch the local model to video-token billing with no price, and every request
+// to that model would then fail price lookup with a 400.
+func dropUnpricedVideoTokenMode(data map[string]any) {
+	modes, ok := data[billing_setting.BillingModeField].(map[string]any)
+	if !ok {
+		return
+	}
+	prices, _ := data[billing_setting.VideoTokenPriceField].(map[string]any)
+	for modelName, mode := range modes {
+		if mode != billing_setting.BillingModeVideoToken {
+			continue
+		}
+		hasPrice := false
+		for _, price := range videoTokenPriceTable(prices[modelName]) {
+			if price > 0 {
+				hasPrice = true
+				break
+			}
+		}
+		if !hasPrice {
+			delete(modes, modelName)
+			delete(prices, modelName)
+		}
+	}
+	if len(modes) == 0 {
+		delete(data, billing_setting.BillingModeField)
+	}
+	if len(prices) == 0 {
+		delete(data, billing_setting.VideoTokenPriceField)
 	}
 }
 
@@ -128,8 +201,23 @@ func normalizeSyncValue(field string, value any) any {
 		if parsed, ok := asFloat64(value); ok {
 			return parsed
 		}
+		return value
 	}
-	return value
+	if field != billing_setting.VideoTokenPriceField {
+		return value
+	}
+	// Transport the tier table as canonical JSON so it stays a scalar sync
+	// value: key order is stable, diffing is a string compare, and the frontend
+	// selection model keeps working unchanged.
+	table := videoTokenPriceTable(value)
+	if table == nil {
+		return nil
+	}
+	encoded, err := common.Marshal(table)
+	if err != nil {
+		return nil
+	}
+	return string(encoded)
 }
 
 func getLocalPricingSyncData() map[string]any {
@@ -417,8 +505,10 @@ func FetchUpstreamRatios(c *gin.Context) {
 					continue
 				}
 				if item.BillingMode == billing_setting.BillingModeVideoToken {
-					billingModeMap[item.ModelName] = billing_setting.BillingModeVideoToken
+					// Mode and tier table are only syncable together — see
+					// dropUnpricedVideoTokenMode.
 					if len(item.VideoTokenPrice) > 0 {
+						billingModeMap[item.ModelName] = billing_setting.BillingModeVideoToken
 						videoTokenPriceMap[item.ModelName] = item.VideoTokenPrice
 					}
 					continue
@@ -498,7 +588,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 				converted[billing_setting.BillingExprField] = valueMap(billingExprMap)
 			}
 			if len(videoTokenPriceMap) > 0 {
-				converted[billing_setting.VideoTokenPriceField] = videoTokenPriceMap
+				converted[billing_setting.VideoTokenPriceField] = valueMap(videoTokenPriceMap)
 			}
 
 			ch <- upstreamResult{Name: uniqueName, Data: converted}
@@ -528,6 +618,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 				Name:   r.Name,
 				Status: "success",
 			})
+			dropUnpricedVideoTokenMode(r.Data)
 			successfulChannels = append(successfulChannels, struct {
 				name string
 				data map[string]any

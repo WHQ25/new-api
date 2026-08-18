@@ -1,5 +1,4 @@
 import type { PricingModel, TokenUnit } from '../types'
-
 import { formatDynamicUnitPrice } from './dynamic-price'
 
 export const VIDEO_TOKEN_RESOLUTIONS = ['480p', '720p', '1080p', '4k'] as const
@@ -23,8 +22,7 @@ type VideoTokenFormatOptions = {
 
 export function isVideoTokenPricingModel(model: PricingModel): boolean {
   return (
-    model.billing_mode === 'video_token' &&
-    getVideoTokenCells(model).length > 0
+    model.billing_mode === 'video_token' && getVideoTokenCells(model).length > 0
   )
 }
 

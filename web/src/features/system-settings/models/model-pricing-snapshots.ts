@@ -121,9 +121,7 @@ export const getPriceSummary = (
 ) => {
   if (row.billingMode === 'video_token') {
     const filled = countVideoTokenPrices(row.videoTokenPrice)
-    return filled > 0
-      ? `${t('Video tiers')} · ${filled}`
-      : t('Unset price')
+    return filled > 0 ? `${t('Video tiers')} · ${filled}` : t('Unset price')
   }
   if (row.billingMode === 'tiered_expr') {
     return getExpressionSummary(row, t)

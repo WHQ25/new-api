@@ -27,7 +27,14 @@ type OpenAIVideo struct {
 	Size               string            `json:"size,omitempty"`
 	RemixedFromVideoID string            `json:"remixed_from_video_id,omitempty"`
 	Error              *OpenAIVideoError `json:"error,omitempty"`
+	Usage              *OpenAIVideoUsage `json:"usage,omitempty"`
 	Metadata           map[string]any    `json:"metadata,omitempty"`
+}
+
+// OpenAIVideoUsage reports the upstream token consumption of a finished video
+// task. It is only present once the provider has reported actual usage.
+type OpenAIVideoUsage struct {
+	TotalTokens int `json:"total_tokens,omitempty"`
 }
 
 func (m *OpenAIVideo) SetProgressStr(progress string) {

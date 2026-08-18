@@ -82,7 +82,11 @@ import {
   isPerCallBilling,
   isTimingLogType,
 } from '../../lib/utils'
-import { USAGE_BILLING_PATH, type LogOtherData } from '../../types'
+import {
+  USAGE_BILLING_PATH,
+  type LogOtherData,
+  type SaturationMarker,
+} from '../../types'
 
 // Maps a channel-update changed-field token (as recorded by the backend audit)
 // to its i18n label key for display in the audit details.
@@ -205,6 +209,35 @@ function isUsageBillingPathLocal(
     return adminInfo.usage_billing_path === USAGE_BILLING_PATH.LOCAL
   }
   return adminInfo?.local_count_tokens === true
+}
+
+function SaturationSection(props: {
+  label: string
+  description: string
+  marker: SaturationMarker
+  t: TFunction
+}) {
+  const { label, description, marker, t } = props
+  return (
+    <DetailSection
+      icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
+      label={label}
+      variant='danger'
+    >
+      <p className='mb-1 text-xs wrap-break-word'>{description}</p>
+      <DetailRow
+        label={t('Kind')}
+        value={quotaSaturationKindLabel(marker.kind, t)}
+      />
+      <DetailRow
+        label={t('Original value')}
+        value={String(marker.original)}
+        mono
+      />
+      <DetailRow label={t('Clamped to')} value={String(marker.clamped)} mono />
+      <DetailRow label={t('Operation')} value={marker.op} mono />
+    </DetailSection>
+  )
 }
 
 function quotaSaturationKindLabel(
@@ -778,39 +811,24 @@ export function DetailsDialog(props: DetailsDialogProps) {
           </DetailSection>
         )}
 
-        {/* Quota saturation marker (admin only) */}
+        {/* Saturation markers (admin only). Both can be present on one log. */}
+        {props.isAdmin && other?.admin_info?.video_token_saturation && (
+          <SaturationSection
+            label={t('Upstream token count clamped')}
+            description={t(
+              'Upstream reported a token count above the billing ceiling'
+            )}
+            marker={other.admin_info.video_token_saturation}
+            t={t}
+          />
+        )}
         {props.isAdmin && other?.admin_info?.quota_saturation && (
-          <DetailSection
-            icon={<AlertTriangle className='size-3.5' aria-hidden='true' />}
+          <SaturationSection
             label={t('Quota clamped')}
-            variant='danger'
-          >
-            <p className='mb-1 text-xs wrap-break-word'>
-              {t('Quota saturation protection triggered')}
-            </p>
-            <DetailRow
-              label={t('Kind')}
-              value={quotaSaturationKindLabel(
-                other.admin_info.quota_saturation.kind,
-                t
-              )}
-            />
-            <DetailRow
-              label={t('Original value')}
-              value={String(other.admin_info.quota_saturation.original)}
-              mono
-            />
-            <DetailRow
-              label={t('Clamped to')}
-              value={String(other.admin_info.quota_saturation.clamped)}
-              mono
-            />
-            <DetailRow
-              label={t('Operation')}
-              value={other.admin_info.quota_saturation.op}
-              mono
-            />
-          </DetailSection>
+            description={t('Quota saturation protection triggered')}
+            marker={other.admin_info.quota_saturation}
+            t={t}
+          />
         )}
 
         {/* Reject reason (admin only) */}

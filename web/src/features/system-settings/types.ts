@@ -408,6 +408,7 @@ export type RatioType =
   | 'model_price'
   | 'billing_mode'
   | 'billing_expr'
+  | 'video_token_price'
 
 export type RatioDifference = {
   current: number | string | null

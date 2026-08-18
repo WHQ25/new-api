@@ -113,6 +113,13 @@ export interface ToolSurchargeItem {
   price: number
 }
 
+export interface SaturationMarker {
+  op: string
+  kind: 'overflow' | 'underflow' | 'nan'
+  original: number
+  clamped: number
+}
+
 export interface LogOtherData {
   admin_info?: {
     is_multi_key?: boolean
@@ -136,12 +143,11 @@ export interface LogOtherData {
     // Quota saturation marker: set when a quota conversion clamped at the
     // int32 bound (overflow/underflow) or hit a NaN fallback while computing
     // this request's charge. Admin-only (nested under admin_info).
-    quota_saturation?: {
-      op: string
-      kind: 'overflow' | 'underflow' | 'nan'
-      original: number
-      clamped: number
-    }
+    quota_saturation?: SaturationMarker
+    // Set when an upstream reported a video task token count above the billing
+    // ceiling and it was clamped before settlement. Kept in its own key so a
+    // settlement that saturated twice records both causes.
+    video_token_saturation?: SaturationMarker
   }
   // Language-independent operation descriptor (audit/login logs).
   // Frontend renders localized content from action + params via i18n templates.
