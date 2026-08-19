@@ -360,6 +360,38 @@ export function getTieredBillingSummary(
 }
 
 /**
+ * Video tiered billing (billing_mode === 'video_token') summary: the matched
+ * tariff cell plus the token counts behind the charge. Returns null for logs
+ * billed by any other mode.
+ */
+export interface VideoTokenBillingSummary {
+  resolution: string
+  hasVideo: boolean
+  usdPerM: number | null
+  estimatedTokens: number | null
+  settledTokens: number | null
+}
+
+export function getVideoTokenBillingSummary(
+  other: LogOtherData | null
+): VideoTokenBillingSummary | null {
+  if (!other || other.billing_mode !== 'video_token') return null
+  const tier = (other.video_token_tier ?? '').trim().toLowerCase()
+  const hasVideo = tier.endsWith('_video')
+  const positive = (value?: number) =>
+    Number.isFinite(value) && (value as number) > 0 ? (value as number) : null
+  return {
+    resolution: hasVideo ? tier.slice(0, -'_video'.length) : tier,
+    hasVideo,
+    usdPerM: positive(other.video_token_price),
+    estimatedTokens: positive(other.estimated_tokens)
+      ? Math.round(other.estimated_tokens as number)
+      : null,
+    settledTokens: positive(other.settled_tokens),
+  }
+}
+
+/**
  * Calculate duration and return formatted result with color variant
  * @param submitTime - Submit timestamp
  * @param finishTime - Finish timestamp

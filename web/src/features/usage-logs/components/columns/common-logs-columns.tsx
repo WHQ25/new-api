@@ -37,7 +37,11 @@ import {
 } from '@/components/ui/tooltip'
 import { getUserAvatarFallback, getUserAvatarStyle } from '@/lib/avatar'
 import { formatBillingCurrencyFromUSD } from '@/lib/currency'
-import { formatLogQuota, formatTimestampToDate } from '@/lib/format'
+import {
+  formatLogQuota,
+  formatTimestampToDate,
+  formatTokens,
+} from '@/lib/format'
 import { cn } from '@/lib/utils'
 
 import { LOG_TYPE_ALL_VALUE } from '../../constants'
@@ -45,6 +49,7 @@ import type { UsageLog } from '../../data/schema'
 import {
   formatModelName,
   getTieredBillingSummary,
+  getVideoTokenBillingSummary,
   hasAnyCacheTokens,
   parseLogOther,
   isViolationFeeLog,
@@ -161,6 +166,7 @@ function buildTypeDetailSegments(
   }
   const isTieredExpr = other.billing_mode === 'tiered_expr'
   const tieredSummary = getTieredBillingSummary(other)
+  const videoTokenSummary = getVideoTokenBillingSummary(other)
   if (isTieredExpr) {
     if (tieredSummary) {
       const baseEntries = tieredSummary.priceEntries
@@ -210,6 +216,24 @@ function buildTypeDetailSegments(
     } else {
       segments.push({
         text: `${t('Dynamic Pricing')} · ${t('No matching results')}`,
+        muted: true,
+      })
+    }
+  } else if (videoTokenSummary) {
+    const tierLabel = videoTokenSummary.resolution
+      ? `${videoTokenSummary.resolution} · ${videoTokenSummary.hasVideo ? t('With video input') : t('No video input')}`
+      : t('Video tiers')
+    segments.push({
+      text:
+        videoTokenSummary.usdPerM != null
+          ? `${tierLabel} · ${formatPrice(videoTokenSummary.usdPerM)}`
+          : tierLabel,
+    })
+    const tokens =
+      videoTokenSummary.settledTokens ?? videoTokenSummary.estimatedTokens
+    if (tokens != null) {
+      segments.push({
+        text: `${t('Tokens')} ${formatTokens(tokens)}`,
         muted: true,
       })
     }

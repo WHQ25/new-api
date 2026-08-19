@@ -40,7 +40,11 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	other := make(map[string]interface{})
 	other["is_task"] = true
 	other["request_path"] = c.Request.URL.Path
-	other["model_price"] = info.PriceData.ModelPrice
+	// video_token 模式下 ModelPrice 存的是档位 $/1M tokens，不是按次单价；
+	// 写进 model_price 会让日志详情把它渲染成「单次调用收费」。
+	if info.PriceData.BillingMode != billing_setting.BillingModeVideoToken {
+		other["model_price"] = info.PriceData.ModelPrice
+	}
 	if info.PriceData.ModelRatio > 0 {
 		other["model_ratio"] = info.PriceData.ModelRatio
 	}
@@ -131,7 +135,16 @@ func taskAdjustTokenQuota(ctx context.Context, task *model.Task, delta int) {
 func taskBillingOther(task *model.Task) map[string]interface{} {
 	other := make(map[string]interface{})
 	if bc := task.PrivateData.BillingContext; bc != nil {
-		other["model_price"] = bc.ModelPrice
+		if bc.BillingMode != "" {
+			other["billing_mode"] = bc.BillingMode
+		}
+		if bc.BillingMode == billing_setting.BillingModeVideoToken {
+			other["video_token_tier"] = bc.VideoTokenTier
+			other["video_token_price"] = bc.VideoTokenPrice
+			other["estimated_tokens"] = bc.EstimatedTokens
+		} else {
+			other["model_price"] = bc.ModelPrice
+		}
 		if bc.ModelRatio > 0 {
 			other["model_ratio"] = bc.ModelRatio
 		}
@@ -226,6 +239,7 @@ func RefundTaskQuota(ctx context.Context, task *model.Task, reason string) bool 
 type taskSettleAudit struct {
 	QuotaClamp      *common.QuotaClamp // quota conversion fell outside int32
 	VideoTokenClamp *common.QuotaClamp // upstream token count exceeded the billing ceiling
+	SettledTokens   int                // 结算时采用的上游 token 数（0 表示非按 token 结算）
 }
 
 func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int, reason string, audit taskSettleAudit) {
@@ -287,6 +301,9 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 	other["task_id"] = task.TaskID
 	other["pre_consumed_quota"] = preConsumedQuota
 	other["actual_quota"] = actualQuota
+	if audit.SettledTokens > 0 {
+		other["settled_tokens"] = audit.SettledTokens
+	}
 	attachSaturationToOther(other, quotaSaturationKey, audit.QuotaClamp)
 	attachSaturationToOther(other, videoTokenSaturationKey, audit.VideoTokenClamp)
 	model.RecordTaskBillingLog(model.RecordTaskBillingLogParams{
@@ -329,6 +346,7 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		tokenClampNote = fmt.Sprintf(", 上游原始上报=%d(已收敛)", totalTokens)
 		totalTokens = relaycommon.MaxVideoTotalTokens
 	}
+	audit.SettledTokens = totalTokens
 
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.BillingMode == billing_setting.BillingModeVideoToken && bc.VideoTokenPrice > 0 {
 		groupRatio := bc.GroupRatio

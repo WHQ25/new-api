@@ -202,6 +202,14 @@ export interface LogOtherData {
   expr_b64?: string
   matched_tier?: string
   request_rules?: RequestRuleTrace[]
+  // Video tiered billing fields, set by backend when
+  // billing_mode === 'video_token'. video_token_tier is the tariff cell key
+  // ("720p" / "720p_video"); estimated_tokens comes from the submit-time meter
+  // and settled_tokens from the upstream token count used at settlement.
+  video_token_tier?: string
+  video_token_price?: number
+  estimated_tokens?: number
+  settled_tokens?: number
   reasoning_effort?: string
   image?: boolean
   image_ratio?: number

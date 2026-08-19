@@ -70,6 +70,7 @@ import {
   parseAuditLine,
   decodeBillingExprB64,
   getTieredBillingSummary,
+  getVideoTokenBillingSummary,
   hasAnyCacheTokens,
   isViolationFeeLog,
   getFirstResponseTimeColor,
@@ -256,10 +257,11 @@ function BillingBreakdown(props: {
 }) {
   const { t } = useTranslation()
   const { log, other, isAdmin } = props
-  const isPerCall = isPerCallBilling(other.model_price)
   const isClaude = other.claude === true
   const isTieredExpr = other.billing_mode === 'tiered_expr'
   const tieredSummary = getTieredBillingSummary(other)
+  const videoTokenSummary = getVideoTokenBillingSummary(other)
+  const isPerCall = !videoTokenSummary && isPerCallBilling(other.model_price)
 
   const rows: Array<{ label: string; value: string }> = []
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
@@ -288,6 +290,32 @@ function BillingBreakdown(props: {
       rows.push({
         label: t('Matched Tier'),
         value: t('No matching results'),
+      })
+    }
+  } else if (videoTokenSummary) {
+    rows.push({ label: t('Billing Mode'), value: t('Video tiers') })
+    if (videoTokenSummary.resolution) {
+      rows.push({
+        label: t('Matched Tier'),
+        value: `${videoTokenSummary.resolution} · ${videoTokenSummary.hasVideo ? t('With video input') : t('No video input')}`,
+      })
+    }
+    if (videoTokenSummary.usdPerM != null) {
+      rows.push({
+        label: t('Price'),
+        value: `${fmtPrice(videoTokenSummary.usdPerM)}/M`,
+      })
+    }
+    if (videoTokenSummary.estimatedTokens != null) {
+      rows.push({
+        label: t('Estimated tokens'),
+        value: formatTokens(videoTokenSummary.estimatedTokens),
+      })
+    }
+    if (videoTokenSummary.settledTokens != null) {
+      rows.push({
+        label: t('Settled tokens'),
+        value: formatTokens(videoTokenSummary.settledTokens),
       })
     }
   } else if (isPerCall) {
