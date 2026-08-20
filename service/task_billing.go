@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -172,6 +173,22 @@ func taskBillingContextPriceData(bc *model.TaskBillingContext) *types.PriceData 
 		return nil
 	}
 	return priceData
+}
+
+// taskSnapshotGroupRatio 读取任务提交时快照的分组倍率。提交阶段 HandleGroupRatio
+// 已经把「分组间覆盖」（GroupGroupRatio）折算进这个值，所以它是结算阶段唯一能与
+// 下单价保持一致的来源；重新查表既会丢掉覆盖倍率，也会让任务执行期间的配置改动
+// 影响已下单的历史任务。返回 false 表示没有可用快照（历史任务或快照损坏）。
+func taskSnapshotGroupRatio(ctx context.Context, task *model.Task) (float64, bool) {
+	bc := task.PrivateData.BillingContext
+	if bc == nil {
+		return 0, false
+	}
+	if math.IsNaN(bc.GroupRatio) || math.IsInf(bc.GroupRatio, 0) || bc.GroupRatio < 0 {
+		logger.LogWarn(ctx, fmt.Sprintf("任务 %s 计费快照分组倍率非法: %v", task.TaskID, bc.GroupRatio))
+		return 0, false
+	}
+	return bc.GroupRatio, true
 }
 
 // taskModelName 从 BillingContext 或 Properties 中获取模型名称。
@@ -349,9 +366,8 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 	audit.SettledTokens = totalTokens
 
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.BillingMode == billing_setting.BillingModeVideoToken && bc.VideoTokenPrice > 0 {
-		groupRatio := bc.GroupRatio
-		if groupRatio != groupRatio || groupRatio < 0 {
-			logger.LogWarn(ctx, fmt.Sprintf("任务 %s video token 快照分组倍率非法: %v", task.TaskID, bc.GroupRatio))
+		groupRatio, ok := taskSnapshotGroupRatio(ctx, task)
+		if !ok {
 			return
 		}
 		actualQuota, clamp := common.QuotaFromFloatChecked(float64(totalTokens) / 1_000_000 * bc.VideoTokenPrice * common.QuotaPerUnit * groupRatio)
@@ -361,35 +377,42 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		return
 	}
 
-	modelName := taskModelName(task)
-
-	// 获取模型价格和倍率
-	modelRatio, hasRatioSetting, _ := ratio_setting.GetModelRatio(modelName)
-	// 只有配置了倍率(非固定价格)时才按 token 重新计费
-	if !hasRatioSetting || modelRatio <= 0 {
-		return
+	// 模型倍率同样优先取下单快照，避免任务执行期间管理员调价改变历史任务的结算价。
+	modelRatio, hasSnapshotRatio := 0.0, false
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.ModelRatio > 0 && !math.IsInf(bc.ModelRatio, 0) {
+		modelRatio, hasSnapshotRatio = bc.ModelRatio, true
 	}
-
-	// 获取用户和组的倍率信息
-	group := task.Group
-	if group == "" {
-		user, err := model.GetUserById(task.UserId, false)
-		if err == nil {
-			group = user.Group
+	if !hasSnapshotRatio {
+		var hasRatioSetting bool
+		modelRatio, hasRatioSetting, _ = ratio_setting.GetModelRatio(taskModelName(task))
+		// 只有配置了倍率(非固定价格)时才按 token 重新计费
+		if !hasRatioSetting || modelRatio <= 0 {
+			return
 		}
 	}
-	if group == "" {
-		return
-	}
 
-	groupRatio := ratio_setting.GetGroupRatio(group)
-	userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(group, group)
-
-	var finalGroupRatio float64
-	if hasUserGroupRatio {
-		finalGroupRatio = userGroupRatio
-	} else {
-		finalGroupRatio = groupRatio
+	finalGroupRatio, hasSnapshotGroupRatio := taskSnapshotGroupRatio(ctx, task)
+	if !hasSnapshotGroupRatio {
+		// 无快照的历史任务：按下单时的用户分组 + 令牌分组实时查。
+		// GetGroupGroupRatio 是 (用户分组, 令牌分组) 两层查表，第一个参数必须是
+		// 用户分组，与 relay/helper/price.go 的预扣费路径保持一致。
+		userGroup := ""
+		if user, err := model.GetUserById(task.UserId, false); err == nil {
+			userGroup = user.Group
+		}
+		usingGroup := task.Group
+		if usingGroup == "" {
+			usingGroup = userGroup
+		}
+		if usingGroup == "" {
+			return
+		}
+		userGroupRatio, hasUserGroupRatio := ratio_setting.GetGroupGroupRatio(userGroup, usingGroup)
+		if hasUserGroupRatio {
+			finalGroupRatio = userGroupRatio
+		} else {
+			finalGroupRatio = ratio_setting.GetGroupRatio(usingGroup)
+		}
 	}
 
 	// 计算 OtherRatios 乘积（视频折扣、时长等）

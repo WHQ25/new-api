@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/glebarez/sqlite"
 	"github.com/shopspring/decimal"
@@ -79,7 +81,13 @@ func truncate(t *testing.T) {
 
 func seedUser(t *testing.T, id int, quota int) {
 	t.Helper()
-	user := &model.User{Id: id, Username: "test_user", Quota: quota, Status: common.UserStatusEnabled}
+	seedUserInGroup(t, id, quota, "")
+}
+
+func seedUserInGroup(t *testing.T, id int, quota int, group string) {
+	t.Helper()
+	user := &model.User{Id: id, Username: fmt.Sprintf("test_user_%d", id), Quota: quota, Status: common.UserStatusEnabled, Group: group,
+		AffCode: fmt.Sprintf("aff%d", id)}
 	require.NoError(t, model.DB.Create(user).Error)
 }
 
@@ -1310,4 +1318,97 @@ func TestRecalculateTaskQuotaByTokens_OverCeilingTokensAreClampedAndAudited(t *t
 	quotaClamp, ok := adminInfo[quotaSaturationKey].(map[string]interface{})
 	require.True(t, ok, "quota clamp must not be overwritten by the token clamp")
 	assert.EqualValues(t, common.QuotaClampOverflow, quotaClamp["kind"])
+}
+
+// applyRatioSettings 覆盖全局倍率配置，并在测试结束后原样恢复。
+func applyRatioSettings(t *testing.T, modelRatio, groupRatio, groupGroupRatio string) {
+	t.Helper()
+	prevModel := ratio_setting.ModelRatio2JSONString()
+	prevGroup := ratio_setting.GroupRatio2JSONString()
+	prevGroupGroup := ratio_setting.GroupGroupRatio2JSONString()
+	t.Cleanup(func() {
+		require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(prevModel))
+		require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(prevGroup))
+		require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(prevGroupGroup))
+	})
+	require.NoError(t, ratio_setting.UpdateModelRatioByJSONString(modelRatio))
+	require.NoError(t, ratio_setting.UpdateGroupRatioByJSONString(groupRatio))
+	require.NoError(t, ratio_setting.UpdateGroupGroupRatioByJSONString(groupGroupRatio))
+}
+
+// 差额结算必须还原下单时的分组倍率：优先用计费快照（提交阶段已折算「分组间覆盖」），
+// 无快照的历史任务才实时查表，且必须按 (用户分组, 令牌分组) 查覆盖倍率——传成
+// (令牌分组, 令牌分组) 会让覆盖倍率整体失效，把折扣差额重新扣回给客户。
+func TestRecalculateTaskQuotaByTokens_RestoresSubmitTimeGroupRatio(t *testing.T) {
+	truncate(t)
+	// lineA 基础倍率 1、clientB 基础倍率 3；clientB(用户分组) 使用 lineA(令牌分组) 时打 5 折。
+	applyRatioSettings(t,
+		`{"test-model":2}`,
+		`{"lineA":1,"clientB":3,"plain":1}`,
+		`{"clientB":{"lineA":0.5}}`,
+	)
+
+	const modelRatio, totalTokens, preConsumed, initQuota = 2.0, 1000, 2000, 1_000_000
+
+	cases := []struct {
+		name          string
+		hasSnapshot   bool
+		snapshotRatio float64
+		userGroup     string
+		taskGroup     string
+		wantRatio     float64
+	}{
+		{"快照携带的覆盖倍率低于基础倍率", true, 0.5, "clientB", "lineA", 0.5},
+		{"快照携带的覆盖倍率高于基础倍率", true, 2, "clientB", "lineA", 2},
+		{"无快照时按用户分组查到覆盖倍率", false, 0, "clientB", "lineA", 0.5},
+		{"无快照且无覆盖规则时用令牌分组基础倍率", false, 0, "plain", "lineA", 1},
+		{"无快照且令牌分组为空时回落到用户分组", false, 0, "clientB", "", 3},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			userID, channelID := 900+i, 900+i
+			seedUserInGroup(t, userID, initQuota, tc.userGroup)
+			seedChannel(t, channelID)
+			seedChargedAccounting(t, userID, channelID, 0, preConsumed, 1)
+
+			task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0)
+			task.Group = tc.taskGroup
+			if tc.hasSnapshot {
+				task.PrivateData.BillingContext.ModelRatio = modelRatio
+				task.PrivateData.BillingContext.GroupRatio = tc.snapshotRatio
+			} else {
+				task.PrivateData.BillingContext = nil
+			}
+
+			RecalculateTaskQuotaByTokens(ctx, task, totalTokens)
+
+			wantQuota := int(totalTokens * modelRatio * tc.wantRatio)
+			assert.Equal(t, wantQuota, task.Quota)
+			assert.Equal(t, initQuota-(wantQuota-preConsumed), getUserQuota(t, userID))
+		})
+	}
+}
+
+// 固定按次价的模型没有配置模型倍率，差额结算必须整体跳过，预扣额度保持不变。
+func TestRecalculateTaskQuotaByTokens_SkipsModelWithoutRatio(t *testing.T) {
+	truncate(t)
+	applyRatioSettings(t, `{"other-model":2}`, `{"default":1}`, `{}`)
+
+	const userID, channelID = 950, 950
+	const initQuota, preConsumed = 1_000_000, 2000
+
+	seedUserInGroup(t, userID, initQuota, "default")
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, 0, preConsumed, 1)
+
+	task := makeTask(userID, channelID, preConsumed, 0, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext = nil
+
+	RecalculateTaskQuotaByTokens(context.Background(), task, 1000)
+
+	assert.Equal(t, preConsumed, task.Quota)
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, int64(0), countLogs(t))
 }
