@@ -2,7 +2,6 @@ package helper
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -139,19 +138,7 @@ func EstimateSeedanceTokens(resolution, aspectRatio string, outSeconds, inSecond
 }
 
 func requestOutputSeconds(req relaycommon.TaskSubmitReq) int {
-	if req.Duration > 0 {
-		return clampVideoTokenSeconds(req.Duration)
-	}
-	if sec, _ := strconv.Atoi(req.Seconds); sec > 0 {
-		return clampVideoTokenSeconds(sec)
-	}
-	if sec := metadataInt(req.Metadata, "duration"); sec > 0 {
-		return clampVideoTokenSeconds(sec)
-	}
-	if sec := metadataInt(req.Metadata, "seconds"); sec > 0 {
-		return clampVideoTokenSeconds(sec)
-	}
-	return videoTokenDefaultSeconds
+	return clampVideoTokenSeconds(req.RequestedOutputSeconds())
 }
 
 func clampVideoTokenSeconds(seconds int) int {

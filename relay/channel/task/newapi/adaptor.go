@@ -172,10 +172,14 @@ func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, e
 				}
 			}
 		}
-	case "failed", "cancelled":
+	case "failed", "cancelled", "expired":
+		// cancelled/expired 同样是终态：漏判会让任务一直轮询到超时清理才退款。
 		taskInfo.Status = model.TaskStatusFailure
 		if upstreamVideo.Error != nil {
 			taskInfo.Reason = upstreamVideo.Error.Message
+		}
+		if taskInfo.Reason == "" {
+			taskInfo.Reason = fmt.Sprintf("task %s", upstreamVideo.Status)
 		}
 	default:
 		return nil, fmt.Errorf("unknown upstream status: %s", upstreamVideo.Status)

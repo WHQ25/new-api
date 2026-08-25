@@ -886,6 +886,28 @@ func (t *TaskSubmitReq) HasImage() bool {
 	return len(t.Images) > 0
 }
 
+// RequestedOutputSeconds 返回客户端显式请求的输出时长（秒），未指定时返回 0。
+// 客户端可以把时长写在顶层 duration/seconds 或 metadata 里，计费估算和上游请求体
+// 必须从同一个来源取值：否则会出现按请求时长计费、却让上游按自己的默认时长生成。
+func (t *TaskSubmitReq) RequestedOutputSeconds() int {
+	if t.Duration > 0 {
+		return t.Duration
+	}
+	if sec, err := strconv.Atoi(t.Seconds); err == nil && sec > 0 {
+		return sec
+	}
+	for _, key := range []string{"duration", "seconds"} {
+		raw, ok := t.Metadata[key]
+		if !ok {
+			continue
+		}
+		if sec, ok := BoundedIntFromAny(raw, MaxTaskDurationSeconds); ok && sec > 0 {
+			return sec
+		}
+	}
+	return 0
+}
+
 func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {
 	type Alias TaskSubmitReq
 	aux := &struct {
