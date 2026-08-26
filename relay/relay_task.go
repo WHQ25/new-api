@@ -141,7 +141,7 @@ func ResolveOriginTask(c *gin.Context, info *relaycommon.RelayInfo) *dto.TaskErr
 
 // RelayTaskSubmit 完成 task 提交的全部流程（每次尝试调用一次）：
 // 刷新渠道元数据 → 确定 platform/adaptor → 验证请求 →
-// 估算计费(EstimateBilling) → 计算价格 → 预扣费（仅首次）→
+// 估算计费(EstimateBilling) → 计算价格 → 按当前分组创建或提高预扣 →
 // 构建/发送/解析上游请求 → 提交后计费调整(AdjustBillingOnSubmit)。
 // 控制器负责 defer Refund 和成功后 Settle。
 func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitResult, *dto.TaskError) {
@@ -179,53 +179,19 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		info.PublicTaskID = model.GenerateTaskID()
 	}
 
-	// 4. 价格计算：视频分档价走像素公式；其它模型保持按次/按量 + 渠道估算。
+	return relayTaskSubmitAttempt(c, info, adaptor, modelName, platform)
+}
+
+func relayTaskSubmitAttempt(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.TaskAdaptor, modelName string, platform constant.TaskPlatform) (*TaskSubmitResult, *dto.TaskError) {
+	// 价格计算：video_token / task_unit_tier 在旧按次估算之前完成，
+	// 避免被 EstimateBilling 或 TaskPricePatches 倍率吞掉。
 	info.OriginModelName = modelName
-	videoTokenBilling := billing_setting.IsVideoTokenBilling(modelName)
-	if videoTokenBilling {
-		priceData, priceErr := helper.ModelPriceHelperVideoToken(c, info)
-		if priceErr != nil {
-			code := "video_token_price_error"
-			if errors.Is(priceErr, billing_setting.ErrVideoTokenResolutionRequired) {
-				code = "missing_resolution"
-			}
-			return nil, service.TaskErrorWrapperLocal(priceErr, code, http.StatusBadRequest)
-		}
-		info.PriceData = priceData
-	} else {
-		priceData, priceErr := helper.ModelPriceHelperPerCall(c, info)
-		if priceErr != nil {
-			return nil, service.TaskErrorWrapper(priceErr, "model_price_error", http.StatusBadRequest)
-		}
-		info.PriceData = priceData
+	if taskErr := applyTaskSubmitPrice(c, info, adaptor, modelName); taskErr != nil {
+		return nil, taskErr
 	}
 
-	// 5. 计费估算：让适配器根据用户请求提供 OtherRatios（时长、分辨率等）
-	//    必须在 ModelPriceHelperPerCall 之后调用（它会重建 PriceData）。
-	//    ResolveOriginTask 可能已在 remix 路径中预设了 OtherRatios，此处合并。
-	//    视频分档价已经按像素公式计入时长/分辨率，不再叠渠道 OtherRatios。
-	if !videoTokenBilling {
-		if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
-			for k, v := range estimatedRatios {
-				info.PriceData.AddOtherRatio(k, v)
-			}
-		}
-
-		// 6. 将 OtherRatios 应用到基础额度（饱和转换，防止溢出成负数）
-		if !common.StringsContains(constant.TaskPricePatches, modelName) {
-			quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
-			quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
-			info.PriceData.Quota = quota
-			noteTaskQuotaClamp(info, clamp)
-		}
-	}
-
-	// 7. 预扣费（仅首次 — 重试时 info.Billing 已存在，跳过）
-	if info.Billing == nil && !info.PriceData.FreeModel {
-		info.ForcePreConsume = true
-		if apiErr := service.PreConsumeBilling(c, info.PriceData.Quota, info); apiErr != nil {
-			return nil, service.TaskErrorFromAPIError(apiErr)
-		}
+	if apiErr := service.PrepareTaskBillingForSelectedGroup(c, info); apiErr != nil {
+		return nil, service.TaskErrorFromAPIError(apiErr)
 	}
 
 	// 8. 构建请求体
@@ -258,14 +224,16 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		return nil, taskErr
 	}
 
-	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios
+	// 11. 提交后计费调整：让适配器根据上游实际返回调整 OtherRatios。
+	// task_unit_tier 在提交时已按单位结清，不再叠提交后倍率。
 	finalQuota := info.PriceData.Quota
-	if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
-		if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
-			// 基于调整后的 ratios 重新计算 quota
-			finalQuota = adjustedQuota
-			info.PriceData.ReplaceOtherRatios(adjustedRatios)
-			info.PriceData.Quota = finalQuota
+	if info.PriceData.BillingMode != billing_setting.BillingModeTaskUnitTier {
+		if adjustedRatios := adaptor.AdjustBillingOnSubmit(info, taskData); len(adjustedRatios) > 0 {
+			if adjustedQuota, ok := recalcQuotaFromRatios(info, adjustedRatios); ok {
+				finalQuota = adjustedQuota
+				info.PriceData.ReplaceOtherRatios(adjustedRatios)
+				info.PriceData.Quota = finalQuota
+			}
 		}
 	}
 
@@ -275,6 +243,60 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 		Platform:       platform,
 		Quota:          finalQuota,
 	}, nil
+}
+
+func applyTaskSubmitPrice(c *gin.Context, info *relaycommon.RelayInfo, adaptor channel.TaskAdaptor, modelName string) *dto.TaskError {
+	billingView := billing_setting.CurrentView()
+	switch billingView.Mode(modelName) {
+	case billing_setting.BillingModeVideoToken:
+		priceData, priceErr := helper.ModelPriceHelperVideoToken(c, info, billingView)
+		if priceErr != nil {
+			code := "video_token_price_error"
+			if errors.Is(priceErr, billing_setting.ErrVideoTokenResolutionRequired) {
+				code = "missing_resolution"
+			}
+			return service.TaskErrorWrapperLocal(priceErr, code, http.StatusBadRequest)
+		}
+		info.PriceData = priceData
+		return nil
+	case billing_setting.BillingModeTaskUnitTier:
+		estimator, ok := adaptor.(channel.TaskUnitTierEstimator)
+		if !ok {
+			return service.TaskErrorWrapperLocal(
+				fmt.Errorf("model %s uses task_unit_tier billing but the adaptor does not estimate units", modelName),
+				"task_unit_tier_estimator_missing",
+				http.StatusBadRequest,
+			)
+		}
+		estimate, err := estimator.EstimateTaskUnitTier(c, info)
+		if err != nil {
+			return service.TaskErrorWrapperLocal(err, "task_unit_tier_estimate_error", http.StatusBadRequest)
+		}
+		priceData, err := helper.ModelPriceHelperTaskUnitTier(c, info, billingView, estimate.Units, estimate.TierKey)
+		if err != nil {
+			return service.TaskErrorWrapperLocal(err, "task_unit_tier_price_error", http.StatusBadRequest)
+		}
+		info.PriceData = priceData
+		return nil
+	default:
+		priceData, priceErr := helper.ModelPriceHelperPerCall(c, info)
+		if priceErr != nil {
+			return service.TaskErrorWrapper(priceErr, "model_price_error", http.StatusBadRequest)
+		}
+		info.PriceData = priceData
+		if estimatedRatios := adaptor.EstimateBilling(c, info); len(estimatedRatios) > 0 {
+			for k, v := range estimatedRatios {
+				info.PriceData.AddOtherRatio(k, v)
+			}
+		}
+		if !common.StringsContains(constant.TaskPricePatches, modelName) {
+			quotaWithRatios := info.PriceData.ApplyOtherRatiosToFloat(float64(info.PriceData.Quota))
+			quota, clamp := common.QuotaFromFloatChecked(quotaWithRatios)
+			info.PriceData.Quota = quota
+			noteTaskQuotaClamp(info, clamp)
+		}
+		return nil
+	}
 }
 
 // recalcQuotaFromRatios 根据 adjustedRatios 重新计算 quota。
@@ -447,6 +469,9 @@ func videoFetchByIDRespBodyBuilder(c *gin.Context) (respBody []byte, taskResp *d
 // carry status and result URLs, so without this a cascading new-api downstream
 // can never settle on actual usage and stays on its pre-consume estimate.
 func attachVideoTokenUsage(videoBody []byte, originTask *model.Task) []byte {
+	if bc := originTask.PrivateData.BillingContext; bc != nil && bc.BillingMode == billing_setting.BillingModeTaskUnitTier {
+		return videoBody
+	}
 	totalTokens := relaycommon.ParseVideoTotalTokens(originTask.Data)
 	if totalTokens <= 0 {
 		return videoBody

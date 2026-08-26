@@ -46,10 +46,11 @@ func TestEstimateVideoTokenBillingReadsRequest(t *testing.T) {
 		"billing_setting.video_token_price": `{"seedance-test":{"720p":7,"1080p":7.7,"1080p_video":4.6}}`,
 	}))
 
+	view := billing_setting.CurrentView()
 	est, err := estimateVideoTokenBilling("seedance-test", relaycommon.TaskSubmitReq{
 		Duration: 5,
 		Metadata: map[string]interface{}{"resolution": "1080p"},
-	})
+	}, view)
 	require.NoError(t, err)
 	assert.Equal(t, "1080p", est.Tier)
 	assert.Equal(t, 7.7, est.USDPerM)
@@ -65,7 +66,7 @@ func TestEstimateVideoTokenBillingReadsRequest(t *testing.T) {
 				map[string]interface{}{"type": "video_url", "video_url": map[string]interface{}{"url": "https://example.com/a.mp4"}},
 			},
 		},
-	})
+	}, view)
 	require.NoError(t, err)
 	assert.Equal(t, "1080p_video", est.Tier)
 	assert.Equal(t, 4.6, est.USDPerM)
@@ -74,28 +75,28 @@ func TestEstimateVideoTokenBillingReadsRequest(t *testing.T) {
 	_, err = estimateVideoTokenBilling("seedance-test", relaycommon.TaskSubmitReq{
 		Duration: 5,
 		Metadata: map[string]interface{}{"resolution": "4k"},
-	})
+	}, view)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "4k")
 
 	_, err = estimateVideoTokenBilling("seedance-test", relaycommon.TaskSubmitReq{
 		Duration: 5,
 		Metadata: map[string]interface{}{"resolution": "1440p"},
-	})
+	}, view)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported video resolution")
 
 	_, err = estimateVideoTokenBilling("seedance-test", relaycommon.TaskSubmitReq{
 		Duration: 5,
 		Prompt:   "A small orange cat walks slowly --duration 5 --ratio 16:9 --resolution 480p",
-	})
+	}, view)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, billing_setting.ErrVideoTokenResolutionRequired)
 
 	_, err = estimateVideoTokenBilling("seedance-test", relaycommon.TaskSubmitReq{
 		Duration: 5,
 		Metadata: map[string]interface{}{},
-	})
+	}, view)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, billing_setting.ErrVideoTokenResolutionRequired)
 }

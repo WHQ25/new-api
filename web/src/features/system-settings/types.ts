@@ -218,6 +218,7 @@ export type ModelSettings = {
   'billing_setting.billing_mode': string
   'billing_setting.billing_expr': string
   'billing_setting.video_token_price': string
+  'billing_setting.task_unit_tier_price': string
   'tool_price_setting.prices': string
   TopupGroupRatio: string
   GroupRatio: string
@@ -277,6 +278,7 @@ export type BillingSettings = {
   'billing_setting.billing_mode': string
   'billing_setting.billing_expr': string
   'billing_setting.video_token_price': string
+  'billing_setting.task_unit_tier_price': string
   'tool_price_setting.prices': string
   TopupGroupRatio: string
   GroupRatio: string
@@ -409,6 +411,7 @@ export type RatioType =
   | 'billing_mode'
   | 'billing_expr'
   | 'video_token_price'
+  | 'task_unit_tier_price'
 
 export type RatioDifference = {
   current: number | string | null

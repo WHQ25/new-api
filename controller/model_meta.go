@@ -153,6 +153,31 @@ func UpdateModelMeta(c *gin.Context) {
 	common.ApiSuccess(c, &m)
 }
 
+type ModelWithPricingRequest struct {
+	Model   model.Model       `json:"model"`
+	Options map[string]string `json:"options"`
+}
+
+func UpsertModelMetaWithPricing(c *gin.Context) {
+	var req ModelWithPricingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.ApiError(c, err)
+		return
+	}
+	if req.Options == nil {
+		req.Options = map[string]string{}
+	}
+	if err := model.EnsureModelPricingOptions(req.Options); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	if err := model.UpsertModelWithOptions(&req.Model, req.Options); err != nil {
+		common.ApiErrorMsg(c, err.Error())
+		return
+	}
+	common.ApiSuccess(c, &req.Model)
+}
+
 // DeleteModelMeta 删除模型
 func DeleteModelMeta(c *gin.Context) {
 	idStr := c.Param("id")

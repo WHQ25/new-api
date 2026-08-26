@@ -44,6 +44,7 @@ export type PricingMode =
   | 'per-request'
   | 'tiered_expr'
   | 'video_token'
+  | 'task_unit_tier'
 
 export const VIDEO_TOKEN_RESOLUTIONS = ['480p', '720p', '1080p', '4k'] as const
 
@@ -111,6 +112,111 @@ export const countVideoTokenPrices = (table?: VideoTokenPriceTable) =>
       }).length
     : 0
 
+export type TaskUnitTierPriceTable = Record<string, string>
+
+export type TaskUnitTierRow = { id: string; key: string; price: string }
+
+export function emptyTaskUnitTierRows(): TaskUnitTierRow[] {
+  return [{ id: 'row-0', key: '', price: '' }]
+}
+
+export function taskUnitTierTableToRows(
+  table?: TaskUnitTierPriceTable
+): TaskUnitTierRow[] {
+  const entries = Object.entries(table || {})
+  if (entries.length === 0) {
+    return emptyTaskUnitTierRows()
+  }
+  return entries.map(([key, price], index) => ({
+    id: `row-${index}-${key}`,
+    key,
+    price,
+  }))
+}
+
+export function getTaskUnitTierRowErrors(
+  rows: TaskUnitTierRow[]
+): Record<string, string> {
+  const errors: Record<string, string> = {}
+  const seen = new Map<string, string>()
+  for (const row of rows) {
+    const trimmed = row.key.trim()
+    const hasPrice = row.price.trim() !== ''
+    if (!trimmed && !hasPrice) continue
+    if (!trimmed) {
+      errors[row.id] = 'Tier keys must be unique and non-empty.'
+      continue
+    }
+    const firstId = seen.get(trimmed)
+    if (firstId) {
+      errors[row.id] = 'Tier keys must be unique and non-empty.'
+      errors[firstId] = 'Tier keys must be unique and non-empty.'
+      continue
+    }
+    seen.set(trimmed, row.id)
+    const numeric = toNumberOrNull(row.price)
+    if (numeric === null || numeric <= 0) {
+      errors[row.id] = 'Unit tier prices must be finite positive numbers.'
+    }
+  }
+  return errors
+}
+
+export const parseTaskUnitTierPriceTable = (
+  raw?: Record<string, number> | TaskUnitTierPriceTable | null
+): TaskUnitTierPriceTable => {
+  const table: TaskUnitTierPriceTable = {}
+  if (!raw) return table
+  for (const [key, value] of Object.entries(raw)) {
+    const trimmed = key.trim()
+    if (!trimmed) continue
+    const numeric = typeof value === 'number' ? value : Number(value)
+    if (Number.isFinite(numeric) && numeric > 0) {
+      table[trimmed] = formatPricingNumber(numeric)
+    }
+  }
+  return table
+}
+
+export const serializeTaskUnitTierPriceTable = (
+  table?: TaskUnitTierPriceTable
+): Record<string, number> => {
+  const out: Record<string, number> = {}
+  if (!table) return out
+  for (const [key, value] of Object.entries(table)) {
+    const trimmed = key.trim()
+    if (!trimmed) continue
+    const numeric = toNumberOrNull(value)
+    if (numeric !== null && numeric > 0) out[trimmed] = numeric
+  }
+  return out
+}
+
+export const countTaskUnitTierPrices = (table?: TaskUnitTierPriceTable) =>
+  Object.keys(serializeTaskUnitTierPriceTable(table)).length
+
+export function getTaskUnitTierValidationError(
+  rows: Array<{ key: string; price: string }>
+): string | null {
+  const seen = new Set<string>()
+  let filled = 0
+  for (const row of rows) {
+    const trimmed = row.key.trim()
+    const hasPrice = row.price.trim() !== ''
+    if (!trimmed && !hasPrice) continue
+    if (!trimmed) return 'Tier keys must be unique and non-empty.'
+    if (seen.has(trimmed)) return 'Tier keys must be unique and non-empty.'
+    seen.add(trimmed)
+    const numeric = toNumberOrNull(row.price)
+    if (numeric === null || numeric <= 0) {
+      return 'Unit tier prices must be finite positive numbers.'
+    }
+    filled += 1
+  }
+  if (filled === 0) return 'Fill at least one unit tier price before saving.'
+  return null
+}
+
 export type LaneKey =
   | 'completion'
   | 'cache'
@@ -133,6 +239,7 @@ export type ModelRatioData = {
   billingExpr?: string
   requestRuleExpr?: string
   videoTokenPrice?: VideoTokenPriceTable
+  taskUnitTierPrice?: TaskUnitTierPriceTable
 }
 
 export type PreviewRow = {
@@ -295,6 +402,18 @@ export function buildPreviewRows(
         key: 'hint',
         label: t('Video tiers'),
         value: t('USD price per 1M tokens for each resolution and input type.'),
+        multiline: true,
+      },
+    ]
+  }
+
+  if (mode === 'task_unit_tier') {
+    return [
+      { key: 'mode', label: 'BillingMode', value: 'task_unit_tier' },
+      {
+        key: 'hint',
+        label: t('Unit tiers'),
+        value: t('USD per unit for each billing tier key.'),
         multiline: true,
       },
     ]

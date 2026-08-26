@@ -372,6 +372,25 @@ export interface VideoTokenBillingSummary {
   settledTokens: number | null
 }
 
+export interface TaskUnitTierBillingSummary {
+  tierKey: string
+  usdPerUnit: number | null
+  units: number | null
+}
+
+export function getTaskUnitTierBillingSummary(
+  other: LogOtherData | null
+): TaskUnitTierBillingSummary | null {
+  if (!other || other.billing_mode !== 'task_unit_tier') return null
+  const positive = (value?: number) =>
+    Number.isFinite(value) && (value as number) > 0 ? (value as number) : null
+  return {
+    tierKey: (other.task_unit_tier_key ?? '').trim(),
+    usdPerUnit: positive(other.task_unit_price),
+    units: positive(other.task_units),
+  }
+}
+
 export function getVideoTokenBillingSummary(
   other: LogOtherData | null
 ): VideoTokenBillingSummary | null {

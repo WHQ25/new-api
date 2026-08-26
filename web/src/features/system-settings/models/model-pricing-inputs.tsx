@@ -16,8 +16,11 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import { Plus, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import {
   InputGroup,
   InputGroupAddon,
@@ -31,7 +34,9 @@ import {
 } from '../components/settings-form-layout'
 import {
   VIDEO_TOKEN_RESOLUTIONS,
+  emptyTaskUnitTierRows,
   numericDraftRegex,
+  type TaskUnitTierRow,
   type VideoTokenPriceTable,
   type VideoTokenResolution,
 } from './model-pricing-core'
@@ -88,10 +93,97 @@ export function VideoTokenPriceGrid(props: {
   )
 }
 
+export function TaskUnitTierPriceEditor(props: {
+  value: TaskUnitTierRow[]
+  onChange: (next: TaskUnitTierRow[]) => void
+  errors?: Record<string, string>
+}) {
+  const { t } = useTranslation()
+  const rows = props.value.length > 0 ? props.value : emptyTaskUnitTierRows()
+  const emit = (nextRows: TaskUnitTierRow[]) => {
+    props.onChange(nextRows)
+  }
+
+  return (
+    <div className='space-y-3'>
+      <div className='grid grid-cols-[minmax(0,1fr)_8rem_auto] gap-2'>
+        <div className='text-muted-foreground text-xs font-medium'>
+          {t('Tier key')}
+        </div>
+        <div className='text-muted-foreground text-xs font-medium'>
+          {t('USD / unit')}
+        </div>
+        <div />
+      </div>
+      {rows.map((row) => (
+        <div key={row.id} className='space-y-1'>
+          <div className='grid grid-cols-[minmax(0,1fr)_8rem_auto] items-center gap-2'>
+            <Input
+              value={row.key}
+              placeholder='720p_audio'
+              aria-invalid={Boolean(props.errors?.[row.id])}
+              onChange={(event) =>
+                emit(
+                  rows.map((item) =>
+                    item.id === row.id
+                      ? { ...item, key: event.target.value }
+                      : item
+                  )
+                )
+              }
+            />
+            <PriceInput
+              value={row.price}
+              placeholder='0.6'
+              unitLabel={t('per unit')}
+              onChange={(value) => {
+                if (!numericDraftRegex.test(value)) return
+                emit(
+                  rows.map((item) =>
+                    item.id === row.id ? { ...item, price: value } : item
+                  )
+                )
+              }}
+            />
+            <Button
+              type='button'
+              variant='ghost'
+              size='sm'
+              className='text-destructive h-8 w-8 p-0'
+              onClick={() => {
+                const next = rows.filter((item) => item.id !== row.id)
+                emit(next.length > 0 ? next : emptyTaskUnitTierRows())
+              }}
+              aria-label={t('Delete')}
+            >
+              <Trash2 className='h-4 w-4' />
+            </Button>
+          </div>
+          {props.errors?.[row.id] ? (
+            <p className='text-destructive text-xs'>{t(props.errors[row.id])}</p>
+          ) : null}
+        </div>
+      ))}
+      <Button
+        type='button'
+        variant='outline'
+        size='sm'
+        onClick={() =>
+          emit([...rows, { id: `row-${Date.now()}`, key: '', price: '' }])
+        }
+      >
+        <Plus className='mr-2 h-4 w-4' />
+        {t('Add tier')}
+      </Button>
+    </div>
+  )
+}
+
 export function PriceInput(props: {
   value: string
   placeholder?: string
   disabled?: boolean
+  unitLabel?: string
   onChange: (value: string) => void
 }) {
   return (
@@ -104,7 +196,9 @@ export function PriceInput(props: {
         disabled={props.disabled}
         onChange={(event) => props.onChange(event.target.value)}
       />
-      <InputGroupAddon align='inline-end'>$/1M</InputGroupAddon>
+      <InputGroupAddon align='inline-end'>
+        {props.unitLabel || '$/1M'}
+      </InputGroupAddon>
     </InputGroup>
   )
 }

@@ -60,6 +60,7 @@ type ModelFormValues = {
   BillingMode: string
   BillingExpr: string
   VideoTokenPrice: string
+  TaskUnitTierPrice: string
 }
 
 type ModelRatioFormProps = {
@@ -82,6 +83,7 @@ type ModelJsonFieldName =
   | 'AudioRatio'
   | 'AudioCompletionRatio'
   | 'VideoTokenPrice'
+  | 'TaskUnitTierPrice'
 
 const modelJsonFields: Array<{
   name: ModelJsonFieldName
@@ -137,6 +139,12 @@ const modelJsonFields: Array<{
     labelKey: 'Video tier prices',
     descriptionKey:
       'JSON map of model → {480p, 480p_video, 720p, ...} USD per 1M tokens.',
+  },
+  {
+    name: 'TaskUnitTierPrice',
+    labelKey: 'Unit-tier prices',
+    descriptionKey:
+      'JSON map of model → {tier_key: USD per unit} for task unit-tier billing.',
   },
 ]
 
@@ -284,6 +292,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               savedBillingMode={savedValues.BillingMode}
               savedBillingExpr={savedValues.BillingExpr}
               savedVideoTokenPrice={savedValues.VideoTokenPrice}
+              savedTaskUnitTierPrice={savedValues.TaskUnitTierPrice}
               modelPrice={form.watch('ModelPrice')}
               modelRatio={form.watch('ModelRatio')}
               cacheRatio={form.watch('CacheRatio')}
@@ -295,6 +304,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
               billingMode={form.watch('BillingMode')}
               billingExpr={form.watch('BillingExpr')}
               videoTokenPrice={form.watch('VideoTokenPrice')}
+              taskUnitTierPrice={form.watch('TaskUnitTierPrice')}
               candidateModelNames={
                 isUnsetVariant ? enabledModelsQuery.data?.data : undefined
               }
@@ -309,6 +319,7 @@ export const ModelRatioForm = memo(function ModelRatioForm({
                   'billing_setting.billing_mode': 'BillingMode',
                   'billing_setting.billing_expr': 'BillingExpr',
                   'billing_setting.video_token_price': 'VideoTokenPrice',
+                  'billing_setting.task_unit_tier_price': 'TaskUnitTierPrice',
                 }
                 const formField =
                   fieldMap[field] || (field as keyof ModelFormValues)

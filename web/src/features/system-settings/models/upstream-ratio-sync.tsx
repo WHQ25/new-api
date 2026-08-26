@@ -27,7 +27,7 @@ import { Button } from '@/components/ui/button'
 import {
   fetchUpstreamRatios,
   getUpstreamChannels,
-  updateSystemOption,
+  updateSystemOptions,
 } from '../api'
 import type {
   DifferencesMap,
@@ -82,6 +82,7 @@ type UpstreamRatioSyncProps = {
     'billing_setting.billing_mode': string
     'billing_setting.billing_expr': string
     'billing_setting.video_token_price'?: string
+    'billing_setting.task_unit_tier_price'?: string
   }
 }
 
@@ -186,9 +187,11 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
 
   const { mutate: syncMutate, isPending: isSyncPending } = useMutation({
     mutationFn: async (updates: Array<{ key: string; value: string }>) => {
+      const options: Record<string, string> = {}
       for (const update of updates) {
-        await updateSystemOption(update)
+        options[update.key] = update.value
       }
+      await updateSystemOptions(options)
     },
     onSuccess: () => {
       toast.success(t('Prices synced successfully'))
@@ -302,6 +305,9 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
       'billing_setting.video_token_price': parseJsonRecord<
         Record<string, number>
       >(modelRatios['billing_setting.video_token_price']),
+      'billing_setting.task_unit_tier_price': parseJsonRecord<
+        Record<string, number>
+      >(modelRatios['billing_setting.task_unit_tier_price']),
     }
   }, [modelRatios])
 
@@ -340,6 +346,9 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         'billing_setting.video_token_price': {
           ...currentRatios['billing_setting.video_token_price'],
         },
+        'billing_setting.task_unit_tier_price': {
+          ...currentRatios['billing_setting.task_unit_tier_price'],
+        },
         'billing_setting.billing_mode': {
           ...currentRatios['billing_setting.billing_mode'],
         },
@@ -369,9 +378,10 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
         if (hasRatio) {
           delete finalRatios.ModelPrice[model]
         }
-        if (selectedTypes.includes('video_token_price')) {
-          // Video-token billing prices from the tier table alone; leaving the
-          // old ratio/price entries behind would only be misleading config.
+        if (
+          selectedTypes.includes('video_token_price') ||
+          selectedTypes.includes('task_unit_tier_price')
+        ) {
           delete finalRatios.ModelPrice[model]
           RATIO_SYNC_FIELDS.forEach((rt) => {
             delete finalRatios[optionKeyBySyncField(rt)][model]
@@ -380,7 +390,10 @@ export function UpstreamRatioSync({ modelRatios }: UpstreamRatioSyncProps) {
 
         Object.entries(ratios).forEach(([ratioType, value]) => {
           const optionKey = optionKeyBySyncField(ratioType)
-          if (ratioType === 'video_token_price') {
+          if (
+            ratioType === 'video_token_price' ||
+            ratioType === 'task_unit_tier_price'
+          ) {
             const table = parseVideoTokenPriceTable(value)
             if (!table) {
               invalidVideoTokenPriceModels.push(model)

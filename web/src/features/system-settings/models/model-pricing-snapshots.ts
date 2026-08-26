@@ -20,8 +20,11 @@ import { splitBillingExprAndRequestRules } from '@/features/pricing/lib/billing-
 
 import { safeJsonParse } from '../utils/json-parser'
 import {
+  countTaskUnitTierPrices,
   countVideoTokenPrices,
+  parseTaskUnitTierPriceTable,
   parseVideoTokenPriceTable,
+  type TaskUnitTierPriceTable,
   type VideoTokenPriceTable,
 } from './model-pricing-core'
 import { formatPricingNumber } from './pricing-format'
@@ -38,6 +41,7 @@ export type ModelPricingSnapshotInput = {
   billingMode: string
   billingExpr: string
   videoTokenPrice: string
+  taskUnitTierPrice: string
 }
 
 export type ModelPricingSnapshot = {
@@ -54,6 +58,7 @@ export type ModelPricingSnapshot = {
   billingExpr?: string
   requestRuleExpr?: string
   videoTokenPrice?: VideoTokenPriceTable
+  taskUnitTierPrice?: TaskUnitTierPriceTable
   hasConflict: boolean
 }
 
@@ -72,6 +77,7 @@ export const isBasePricingUnset = (snapshot?: ModelPricingSnapshot) =>
   !snapshot ||
   (snapshot.billingMode !== 'tiered_expr' &&
     snapshot.billingMode !== 'video_token' &&
+    snapshot.billingMode !== 'task_unit_tier' &&
     !hasPricingValue(snapshot.price) &&
     !hasPricingValue(snapshot.ratio))
 
@@ -92,6 +98,7 @@ export const getModeLabel = (mode?: string) => {
   if (mode === 'per-request') return 'Per-request'
   if (mode === 'tiered_expr') return 'Expression'
   if (mode === 'video_token') return 'Video tiers'
+  if (mode === 'task_unit_tier') return 'Unit tiers'
   return 'Per-token'
 }
 
@@ -101,6 +108,7 @@ export const getModeVariant = (
   if (mode === 'per-request') return 'warning'
   if (mode === 'tiered_expr') return 'info'
   if (mode === 'video_token') return 'info'
+  if (mode === 'task_unit_tier') return 'info'
   return 'success'
 }
 
@@ -122,6 +130,10 @@ export const getPriceSummary = (
   if (row.billingMode === 'video_token') {
     const filled = countVideoTokenPrices(row.videoTokenPrice)
     return filled > 0 ? `${t('Video tiers')} · ${filled}` : t('Unset price')
+  }
+  if (row.billingMode === 'task_unit_tier') {
+    const filled = countTaskUnitTierPrices(row.taskUnitTierPrice)
+    return filled > 0 ? `${t('Unit tiers')} · ${filled}` : t('Unset price')
   }
   if (row.billingMode === 'tiered_expr') {
     return getExpressionSummary(row, t)
@@ -153,6 +165,9 @@ export const getPriceDetail = (
 ) => {
   if (row.billingMode === 'video_token') {
     return t('Resolution and video-input token prices')
+  }
+  if (row.billingMode === 'task_unit_tier') {
+    return t('USD per unit for each billing tier key.')
   }
   if (row.billingMode === 'tiered_expr') {
     return row.requestRuleExpr
@@ -192,6 +207,7 @@ export const buildModelSnapshots = ({
   billingMode,
   billingExpr,
   videoTokenPrice,
+  taskUnitTierPrice,
 }: ModelPricingSnapshotInput): ModelPricingSnapshot[] => {
   const priceMap = safeJsonParse<Record<string, number>>(modelPrice, {
     fallback: {},
@@ -239,6 +255,12 @@ export const buildModelSnapshots = ({
     fallback: {},
     context: 'video token prices',
   })
+  const taskUnitTierPriceMap = safeJsonParse<
+    Record<string, Record<string, number>>
+  >(taskUnitTierPrice, {
+    fallback: {},
+    context: 'task unit tier prices',
+  })
 
   const modelNames = new Set([
     ...Object.keys(priceMap),
@@ -252,6 +274,7 @@ export const buildModelSnapshots = ({
     ...Object.keys(billingModeMap),
     ...Object.keys(billingExprMap),
     ...Object.keys(videoTokenPriceMap),
+    ...Object.keys(taskUnitTierPriceMap),
   ])
 
   return [...modelNames].map((name) => {
@@ -270,6 +293,16 @@ export const buildModelSnapshots = ({
         name,
         billingMode: 'video_token',
         videoTokenPrice: parseVideoTokenPriceTable(videoTokenPriceMap[name]),
+        hasConflict: false,
+      }
+    }
+    if (modeForModel === 'task_unit_tier') {
+      return {
+        name,
+        billingMode: 'task_unit_tier',
+        taskUnitTierPrice: parseTaskUnitTierPriceTable(
+          taskUnitTierPriceMap[name]
+        ),
         hasConflict: false,
       }
     }
@@ -333,5 +366,6 @@ export const getSnapshotSignature = (snapshot?: ModelPricingSnapshot) => {
     billingExpr: snapshot.billingExpr || '',
     requestRuleExpr: snapshot.requestRuleExpr || '',
     videoTokenPrice: snapshot.videoTokenPrice || {},
+    taskUnitTierPrice: snapshot.taskUnitTierPrice || {},
   })
 }

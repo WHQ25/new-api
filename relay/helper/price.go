@@ -70,14 +70,21 @@ func HandleGroupRatio(ctx *gin.Context, relayInfo *relaycommon.RelayInfo) hostty
 	return groupRatioInfo
 }
 
+func applyFreeGroupQuota(groupRatio float64, quota int) (int, bool) {
+	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume && groupRatio == 0 {
+		return 0, true
+	}
+	return quota, false
+}
+
 func ModelPriceHelper(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta) (hosttypes.PriceData, error) {
 	modelPrice, usePrice := ratio_setting.GetModelPrice(info.OriginModelName, false)
 
 	groupRatioInfo := HandleGroupRatio(c, info)
+	billingView := billing_setting.CurrentView()
 
-	// Check if this model uses tiered_expr billing
-	if billing_setting.GetBillingMode(info.OriginModelName) == billing_setting.BillingModeTieredExpr {
-		return modelPriceHelperTiered(c, info, promptTokens, meta, groupRatioInfo)
+	if billingView.Mode(info.OriginModelName) == billing_setting.BillingModeTieredExpr {
+		return modelPriceHelperTiered(c, info, promptTokens, meta, groupRatioInfo, billingView)
 	}
 
 	var preConsumedQuota int
@@ -259,19 +266,22 @@ func HasModelBillingConfig(modelName string) bool {
 	if _, ok, _ := ratio_setting.GetModelRatio(modelName); ok {
 		return true
 	}
-	switch billing_setting.GetBillingMode(modelName) {
+	view := billing_setting.CurrentView()
+	switch view.Mode(modelName) {
 	case billing_setting.BillingModeVideoToken:
-		return billing_setting.HasVideoTokenPrice(modelName)
+		return billing_setting.HasVideoTokenPriceFromTable(view.VideoTokenTable(modelName))
+	case billing_setting.BillingModeTaskUnitTier:
+		return billing_setting.HasTaskUnitTierPriceFromTable(view.TaskUnitTable(modelName))
 	case billing_setting.BillingModeTieredExpr:
-		expr, ok := billing_setting.GetBillingExpr(modelName)
+		expr, ok := view.Expr(modelName)
 		return ok && strings.TrimSpace(expr) != ""
 	default:
 		return false
 	}
 }
 
-func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo hosttypes.GroupRatioInfo) (hosttypes.PriceData, error) {
-	exprStr, ok := billing_setting.GetBillingExpr(info.OriginModelName)
+func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptTokens int, meta *types.TokenCountMeta, groupRatioInfo hosttypes.GroupRatioInfo, view billing_setting.View) (hosttypes.PriceData, error) {
+	exprStr, ok := view.Expr(info.OriginModelName)
 	if !ok {
 		return hosttypes.PriceData{}, fmt.Errorf("model %s is configured as tiered_expr but has no billing expression", info.OriginModelName)
 	}
@@ -303,12 +313,7 @@ func modelPriceHelperTiered(c *gin.Context, info *relaycommon.RelayInfo, promptT
 	}
 
 	freeModel := false
-	if !operation_setting.GetQuotaSetting().EnableFreeModelPreConsume {
-		if groupRatioInfo.GroupRatio == 0 {
-			preConsumedQuota = 0
-			freeModel = true
-		}
-	}
+	preConsumedQuota, freeModel = applyFreeGroupQuota(groupRatioInfo.GroupRatio, preConsumedQuota)
 
 	exprHash := billingexpr.ExprHashString(exprStr)
 	snapshot := &billingexpr.BillingSnapshot{

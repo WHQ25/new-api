@@ -182,6 +182,7 @@ describe('video tier price sync', () => {
     expect(parseVideoTokenPriceTable('[1,2]')).toBeNull()
     expect(parseVideoTokenPriceTable('{"720p":"7"}')).toBeNull()
     expect(parseVideoTokenPriceTable(7)).toBeNull()
+    expect(parseVideoTokenPriceTable('{"720p":7,"bad":0}')).toBeNull()
   })
 
   it('renders the tier table as a tier count instead of raw JSON', () => {

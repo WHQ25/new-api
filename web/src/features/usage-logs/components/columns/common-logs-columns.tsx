@@ -48,6 +48,7 @@ import { LOG_TYPE_ALL_VALUE } from '../../constants'
 import type { UsageLog } from '../../data/schema'
 import {
   formatModelName,
+  getTaskUnitTierBillingSummary,
   getTieredBillingSummary,
   getVideoTokenBillingSummary,
   hasAnyCacheTokens,
@@ -167,6 +168,7 @@ function buildTypeDetailSegments(
   const isTieredExpr = other.billing_mode === 'tiered_expr'
   const tieredSummary = getTieredBillingSummary(other)
   const videoTokenSummary = getVideoTokenBillingSummary(other)
+  const unitTierSummary = getTaskUnitTierBillingSummary(other)
   if (isTieredExpr) {
     if (tieredSummary) {
       const baseEntries = tieredSummary.priceEntries
@@ -234,6 +236,20 @@ function buildTypeDetailSegments(
     if (tokens != null) {
       segments.push({
         text: `${t('Tokens')} ${formatTokens(tokens)}`,
+        muted: true,
+      })
+    }
+  } else if (unitTierSummary) {
+    const tierLabel = unitTierSummary.tierKey || t('Unit tiers')
+    segments.push({
+      text:
+        unitTierSummary.usdPerUnit != null
+          ? `${tierLabel} · ${formatPriceCompact(unitTierSummary.usdPerUnit)}/${t('unit')}`
+          : tierLabel,
+    })
+    if (unitTierSummary.units != null) {
+      segments.push({
+        text: `${t('Units')} ${unitTierSummary.units}`,
         muted: true,
       })
     }

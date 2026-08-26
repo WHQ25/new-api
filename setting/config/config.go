@@ -18,6 +18,10 @@ type ConfigManager struct {
 
 var GlobalConfig = NewConfigManager()
 
+type ConfigMapLoader interface {
+	LoadConfigMap(map[string]string) error
+}
+
 func NewConfigManager() *ConfigManager {
 	return &ConfigManager{
 		configs: make(map[string]interface{}),
@@ -55,8 +59,13 @@ func (cm *ConfigManager) LoadFromDB(options map[string]string) error {
 			}
 		}
 
-		// 如果找到配置项，则更新配置
 		if len(configMap) > 0 {
+			if loader, ok := config.(ConfigMapLoader); ok {
+				if err := loader.LoadConfigMap(configMap); err != nil {
+					common.SysError("failed to update config " + name + ": " + err.Error())
+				}
+				continue
+			}
 			if err := updateConfigFromMap(config, configMap); err != nil {
 				common.SysError("failed to update config " + name + ": " + err.Error())
 				continue

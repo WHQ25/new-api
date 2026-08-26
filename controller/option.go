@@ -10,6 +10,7 @@ import (
 	"github.com/QuantumNous/new-api/i18n"
 	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/setting"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/QuantumNous/new-api/setting/model_setting"
 	"github.com/QuantumNous/new-api/setting/operation_setting"
@@ -32,6 +33,11 @@ var completionRatioMetaOptionKeys = []string{
 
 func isPaymentComplianceOptionKey(key string) bool {
 	return strings.HasPrefix(key, "payment_setting.compliance_")
+}
+
+func validateFloatMapOption(value string) error {
+	parsed := map[string]float64{}
+	return common.Unmarshal([]byte(value), &parsed)
 }
 
 func isPositiveOptionValue(value string) bool {
@@ -264,8 +270,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "ImageRatio":
-		err = ratio_setting.UpdateImageRatioByJSONString(option.Value.(string))
-		if err != nil {
+		if err = validateFloatMapOption(option.Value.(string)); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "图片倍率设置失败: " + err.Error(),
@@ -273,8 +278,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "AudioRatio":
-		err = ratio_setting.UpdateAudioRatioByJSONString(option.Value.(string))
-		if err != nil {
+		if err = validateFloatMapOption(option.Value.(string)); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "音频倍率设置失败: " + err.Error(),
@@ -282,8 +286,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "AudioCompletionRatio":
-		err = ratio_setting.UpdateAudioCompletionRatioByJSONString(option.Value.(string))
-		if err != nil {
+		if err = validateFloatMapOption(option.Value.(string)); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "音频补全倍率设置失败: " + err.Error(),
@@ -291,8 +294,7 @@ func UpdateOption(c *gin.Context) {
 			return
 		}
 	case "CreateCacheRatio":
-		err = ratio_setting.UpdateCreateCacheRatioByJSONString(option.Value.(string))
-		if err != nil {
+		if err = validateFloatMapOption(option.Value.(string)); err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,
 				"message": "缓存创建倍率设置失败: " + err.Error(),
@@ -355,6 +357,24 @@ func UpdateOption(c *gin.Context) {
 		}
 	case "console_setting.uptime_kuma_groups":
 		err = console_setting.ValidateConsoleSettings(option.Value.(string), "UptimeKumaGroups")
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	case "billing_setting.billing_mode":
+		err = billing_setting.ValidateBillingModeJSON(option.Value.(string))
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"success": false,
+				"message": err.Error(),
+			})
+			return
+		}
+	case "billing_setting.task_unit_tier_price":
+		err = billing_setting.ValidateTaskUnitTierPriceJSON(option.Value.(string))
 		if err != nil {
 			c.JSON(http.StatusOK, gin.H{
 				"success": false,

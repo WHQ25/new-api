@@ -69,6 +69,7 @@ import {
   getParamOverrideActionLabel,
   parseAuditLine,
   decodeBillingExprB64,
+  getTaskUnitTierBillingSummary,
   getTieredBillingSummary,
   getVideoTokenBillingSummary,
   hasAnyCacheTokens,
@@ -261,7 +262,11 @@ function BillingBreakdown(props: {
   const isTieredExpr = other.billing_mode === 'tiered_expr'
   const tieredSummary = getTieredBillingSummary(other)
   const videoTokenSummary = getVideoTokenBillingSummary(other)
-  const isPerCall = !videoTokenSummary && isPerCallBilling(other.model_price)
+  const unitTierSummary = getTaskUnitTierBillingSummary(other)
+  const isPerCall =
+    !videoTokenSummary &&
+    !unitTierSummary &&
+    isPerCallBilling(other.model_price)
 
   const rows: Array<{ label: string; value: string }> = []
   const priceOpts = { digitsLarge: 4, digitsSmall: 6, abbreviate: false }
@@ -290,6 +295,23 @@ function BillingBreakdown(props: {
       rows.push({
         label: t('Matched Tier'),
         value: t('No matching results'),
+      })
+    }
+  } else if (unitTierSummary) {
+    rows.push({ label: t('Billing Mode'), value: t('Unit tiers') })
+    if (unitTierSummary.tierKey) {
+      rows.push({ label: t('Matched Tier'), value: unitTierSummary.tierKey })
+    }
+    if (unitTierSummary.usdPerUnit != null) {
+      rows.push({
+        label: t('Price'),
+        value: `${fmtPrice(unitTierSummary.usdPerUnit)}/${t('unit')}`,
+      })
+    }
+    if (unitTierSummary.units != null) {
+      rows.push({
+        label: t('Units'),
+        value: String(unitTierSummary.units),
       })
     }
   } else if (videoTokenSummary) {

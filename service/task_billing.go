@@ -41,9 +41,10 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	other := make(map[string]interface{})
 	other["is_task"] = true
 	other["request_path"] = c.Request.URL.Path
-	// video_token 模式下 ModelPrice 存的是档位 $/1M tokens，不是按次单价；
+	// video_token / task_unit_tier 的 ModelPrice 不是按次单价，
 	// 写进 model_price 会让日志详情把它渲染成「单次调用收费」。
-	if info.PriceData.BillingMode != billing_setting.BillingModeVideoToken {
+	if info.PriceData.BillingMode != billing_setting.BillingModeVideoToken &&
+		info.PriceData.BillingMode != billing_setting.BillingModeTaskUnitTier {
 		other["model_price"] = info.PriceData.ModelPrice
 	}
 	if info.PriceData.ModelRatio > 0 {
@@ -64,6 +65,11 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 		other["video_token_tier"] = info.PriceData.VideoTokenTier
 		other["video_token_price"] = info.PriceData.VideoTokenPrice
 		other["estimated_tokens"] = info.PriceData.EstimatedTokens
+	}
+	if info.PriceData.BillingMode == billing_setting.BillingModeTaskUnitTier {
+		other["task_unit_tier_key"] = info.PriceData.TaskUnitTierKey
+		other["task_unit_price"] = info.PriceData.TaskUnitPrice
+		other["task_units"] = info.PriceData.TaskUnits
 	}
 	attachQuotaSaturation(c, info, other)
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
@@ -143,6 +149,10 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 			other["video_token_tier"] = bc.VideoTokenTier
 			other["video_token_price"] = bc.VideoTokenPrice
 			other["estimated_tokens"] = bc.EstimatedTokens
+		} else if bc.BillingMode == billing_setting.BillingModeTaskUnitTier {
+			other["task_unit_tier_key"] = bc.TaskUnitTierKey
+			other["task_unit_price"] = bc.TaskUnitPrice
+			other["task_units"] = bc.TaskUnits
 		} else {
 			other["model_price"] = bc.ModelPrice
 		}
@@ -342,6 +352,10 @@ func RecalculateTaskQuota(ctx context.Context, task *model.Task, actualQuota int
 // 与预扣费的差额进行补扣或退还。支持钱包和订阅计费来源。
 func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTokens int) {
 	if totalTokens <= 0 {
+		return
+	}
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.BillingMode == billing_setting.BillingModeTaskUnitTier {
+		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按单位分档计费，跳过 token 重算", task.TaskID))
 		return
 	}
 

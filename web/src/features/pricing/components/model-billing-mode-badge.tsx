@@ -22,6 +22,7 @@ import { StatusBadge, type StatusVariant } from '@/components/status-badge'
 
 import { isDynamicPricingModel } from '../lib/dynamic-price'
 import { isTokenBasedModel } from '../lib/model-helpers'
+import { isTaskUnitTierPricingModel } from '../lib/task-unit-tier-price'
 import { isVideoTokenPricingModel } from '../lib/video-token-price'
 import type { PricingModel } from '../types'
 
@@ -37,6 +38,9 @@ export function ModelBillingModeBadge(props: ModelBillingModeBadgeProps) {
 
   if (isVideoTokenPricingModel(props.model)) {
     label = t('Video tiers')
+    variant = 'info'
+  } else if (isTaskUnitTierPricingModel(props.model)) {
+    label = t('Unit tiers')
     variant = 'info'
   } else if (isDynamicPricingModel(props.model)) {
     label = t('Dynamic Pricing')

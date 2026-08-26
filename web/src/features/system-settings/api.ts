@@ -38,6 +38,19 @@ export async function getSystemOptions() {
 
 export async function updateSystemOption(request: UpdateOptionRequest) {
   const res = await api.put<UpdateOptionResponse>('/api/option/', request)
+  if (!res.data.success) {
+    throw new Error(res.data.message || 'Failed to update setting')
+  }
+  return res.data
+}
+
+export async function updateSystemOptions(options: Record<string, string>) {
+  const res = await api.put<UpdateOptionResponse>('/api/option/bulk', {
+    options,
+  })
+  if (!res.data.success) {
+    throw new Error(res.data.message || 'Failed to update setting')
+  }
   return res.data
 }
 

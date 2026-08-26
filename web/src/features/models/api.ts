@@ -80,6 +80,20 @@ export async function createModel(
   return res.data
 }
 
+export async function saveModelWithPricing(payload: {
+  model: Partial<Model> & { id?: number }
+  options: Record<string, string>
+}): Promise<{ success: boolean; message?: string; data?: Model }> {
+  const request = payload.model.id
+    ? api.put('/api/models/with-pricing', payload)
+    : api.post('/api/models/with-pricing', payload)
+  const res = await request
+  if (!res.data?.success) {
+    throw new Error(res.data?.message || 'Failed to save model pricing')
+  }
+  return res.data
+}
+
 /**
  * Update existing model
  */

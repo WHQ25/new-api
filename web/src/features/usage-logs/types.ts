@@ -210,6 +210,9 @@ export interface LogOtherData {
   video_token_price?: number
   estimated_tokens?: number
   settled_tokens?: number
+  task_unit_tier_key?: string
+  task_unit_price?: number
+  task_units?: number
   reasoning_effort?: string
   image?: boolean
   image_ratio?: number

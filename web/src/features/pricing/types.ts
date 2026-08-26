@@ -56,6 +56,8 @@ export type PricingModel = {
   billing_expr?: string
   /** USD per 1M tokens for Seedance-style resolution × video-input cells */
   video_token_price?: Record<string, number>
+  /** USD per billed unit for task_unit_tier cells */
+  task_unit_tier_price?: Record<string, number>
   /** Pricing version returned by backend, useful for cache busting */
   pricing_version?: string
   /**

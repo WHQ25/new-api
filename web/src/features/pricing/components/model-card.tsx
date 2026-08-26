@@ -32,10 +32,12 @@ import {
 import { parseTags } from '../lib/filters'
 import { isTokenBasedModel } from '../lib/model-helpers'
 import { formatPrice, formatRequestPrice } from '../lib/price'
+import { isTaskUnitTierPricingModel } from '../lib/task-unit-tier-price'
 import { isVideoTokenPricingModel } from '../lib/video-token-price'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
 import { ModelPerfBadge, type ModelPerfBadgeData } from './model-perf-badge'
+import { TaskUnitTierPriceSummary } from './task-unit-tier-pricing'
 import { VideoTokenPriceSummary } from './video-token-pricing'
 
 export interface ModelCardProps {
@@ -99,6 +101,16 @@ export const ModelCard = memo(function ModelCard(props: ModelCardProps) {
       <VideoTokenPriceSummary
         model={props.model}
         tokenUnit={tokenUnit}
+        showRechargePrice={showRechargePrice}
+        priceRate={priceRate}
+        usdExchangeRate={usdExchangeRate}
+        selectedGroup={props.selectedGroup}
+      />
+    )
+  } else if (isTaskUnitTierPricingModel(props.model)) {
+    priceSummary = (
+      <TaskUnitTierPriceSummary
+        model={props.model}
         showRechargePrice={showRechargePrice}
         priceRate={priceRate}
         usdExchangeRate={usdExchangeRate}

@@ -24,6 +24,7 @@ import {
   ENDPOINT_TYPES,
 } from '../constants'
 import type { PricingModel } from '../types'
+import { getTaskUnitTierPriceRange } from './task-unit-tier-price'
 import { getVideoTokenPriceRange } from './video-token-price'
 
 // ----------------------------------------------------------------------------
@@ -106,6 +107,10 @@ function getModelPrice(model: PricingModel): number {
   const range = getVideoTokenPriceRange(model)
   if (range) {
     return range.min / 2
+  }
+  const unitRange = getTaskUnitTierPriceRange(model)
+  if (unitRange) {
+    return unitRange.min
   }
   return model.quota_type === 0 ? model.model_ratio : model.model_price || 0
 }

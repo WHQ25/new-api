@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -39,6 +40,41 @@ func PreConsumeBilling(c *gin.Context, preConsumedQuota int, relayInfo *relaycom
 		return apiErr
 	}
 	relayInfo.Billing = session
+	return nil
+}
+
+// PrepareTaskBillingForSelectedGroup creates or raises the task billing
+// reservation for the currently selected auto-group before an upstream attempt.
+// A cheaper retry group does not refund early; final SettleBilling handles that.
+func PrepareTaskBillingForSelectedGroup(c *gin.Context, relayInfo *relaycommon.RelayInfo) *types.NewAPIError {
+	if relayInfo == nil {
+		return types.NewError(fmt.Errorf("relayInfo is nil"), types.ErrorCodeInvalidRequest, types.ErrOptionWithSkipRetry())
+	}
+
+	targetQuota := relayInfo.PriceData.Quota
+	if relayInfo.Billing == nil {
+		if relayInfo.PriceData.FreeModel {
+			return nil
+		}
+		relayInfo.ForcePreConsume = true
+		return PreConsumeBilling(c, targetQuota, relayInfo)
+	}
+	if targetQuota <= 0 || relayInfo.PriceData.FreeModel {
+		return nil
+	}
+	if targetQuota <= relayInfo.Billing.GetPreConsumedQuota() {
+		return nil
+	}
+
+	relayInfo.PriceData.FreeModel = false
+	if err := relayInfo.Billing.Reserve(targetQuota); err != nil {
+		var apiErr *types.NewAPIError
+		if errors.As(err, &apiErr) {
+			return apiErr
+		}
+		return types.NewError(err, types.ErrorCodeUpdateDataError, types.ErrOptionWithSkipRetry())
+	}
+	relayInfo.FinalPreConsumedQuota = relayInfo.Billing.GetPreConsumedQuota()
 	return nil
 }
 

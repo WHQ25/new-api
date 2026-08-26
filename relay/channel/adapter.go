@@ -79,6 +79,20 @@ type TaskAdaptor interface {
 	ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error)
 }
 
+// TaskUnitTierEstimate is the adaptor-owned billing input for task_unit_tier
+// mode: billed units and the configured tariff cell key. Prices stay in config.
+type TaskUnitTierEstimate struct {
+	Units   float64
+	TierKey string
+}
+
+// TaskUnitTierEstimator is an optional TaskAdaptor capability. Models billed
+// with billing_mode=task_unit_tier require the adaptor to implement it; the
+// relay returns 400 instead of falling back to a fixed per-call price.
+type TaskUnitTierEstimator interface {
+	EstimateTaskUnitTier(c *gin.Context, info *relaycommon.RelayInfo) (TaskUnitTierEstimate, error)
+}
+
 type OpenAIVideoConverter interface {
 	ConvertToOpenAIVideo(originTask *model.Task) ([]byte, error)
 }

@@ -69,6 +69,7 @@ export const RATIO_TYPE_OPTIONS = [
   { label: 'Fixed price', value: 'model_price' },
   { label: 'Expression billing', value: 'billing_expr' },
   { label: 'Video tier prices', value: 'video_token_price' },
+  { label: 'Unit-tier prices', value: 'task_unit_tier_price' },
 ] as const
 
 export const CHANNEL_STATUS_CONFIG = {

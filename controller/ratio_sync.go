@@ -83,6 +83,7 @@ var pricingSyncFields = []string{
 	billing_setting.BillingModeField,
 	billing_setting.BillingExprField,
 	billing_setting.VideoTokenPriceField,
+	billing_setting.TaskUnitTierPriceField,
 }
 
 var numericPricingSyncFields = map[string]bool{
@@ -149,13 +150,21 @@ func videoTokenPriceTable(value any) map[string]float64 {
 // switch the local model to video-token billing with no price, and every request
 // to that model would then fail price lookup with a 400.
 func dropUnpricedVideoTokenMode(data map[string]any) {
+	dropUnpricedPairedBillingMode(data, billing_setting.BillingModeVideoToken, billing_setting.VideoTokenPriceField)
+}
+
+func dropUnpricedTaskUnitTierMode(data map[string]any) {
+	dropUnpricedPairedBillingMode(data, billing_setting.BillingModeTaskUnitTier, billing_setting.TaskUnitTierPriceField)
+}
+
+func dropUnpricedPairedBillingMode(data map[string]any, modeName, priceField string) {
 	modes, ok := data[billing_setting.BillingModeField].(map[string]any)
 	if !ok {
 		return
 	}
-	prices, _ := data[billing_setting.VideoTokenPriceField].(map[string]any)
+	prices, _ := data[priceField].(map[string]any)
 	for modelName, mode := range modes {
-		if mode != billing_setting.BillingModeVideoToken {
+		if mode != modeName {
 			continue
 		}
 		hasPrice := false
@@ -174,7 +183,7 @@ func dropUnpricedVideoTokenMode(data map[string]any) {
 		delete(data, billing_setting.BillingModeField)
 	}
 	if len(prices) == 0 {
-		delete(data, billing_setting.VideoTokenPriceField)
+		delete(data, priceField)
 	}
 }
 
@@ -203,7 +212,7 @@ func normalizeSyncValue(field string, value any) any {
 		}
 		return value
 	}
-	if field != billing_setting.VideoTokenPriceField {
+	if field != billing_setting.VideoTokenPriceField && field != billing_setting.TaskUnitTierPriceField {
 		return value
 	}
 	// Transport the tier table as canonical JSON so it stays a scalar sync
@@ -481,6 +490,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 				BillingMode          string             `json:"billing_mode"`
 				BillingExpr          string             `json:"billing_expr"`
 				VideoTokenPrice      map[string]float64 `json:"video_token_price"`
+				TaskUnitTierPrice    map[string]float64 `json:"task_unit_tier_price"`
 			}
 			if err := common.Unmarshal(body.Data, &pricingItems); err != nil {
 				logger.LogWarn(c.Request.Context(), "unrecognized data format from "+chItem.Name+": "+err.Error())
@@ -499,6 +509,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 			billingModeMap := make(map[string]string)
 			billingExprMap := make(map[string]string)
 			videoTokenPriceMap := make(map[string]map[string]float64)
+			taskUnitTierPriceMap := make(map[string]map[string]float64)
 
 			for _, item := range pricingItems {
 				if item.ModelName == "" {
@@ -510,6 +521,13 @@ func FetchUpstreamRatios(c *gin.Context) {
 					if len(item.VideoTokenPrice) > 0 {
 						billingModeMap[item.ModelName] = billing_setting.BillingModeVideoToken
 						videoTokenPriceMap[item.ModelName] = item.VideoTokenPrice
+					}
+					continue
+				}
+				if item.BillingMode == billing_setting.BillingModeTaskUnitTier {
+					if len(item.TaskUnitTierPrice) > 0 {
+						billingModeMap[item.ModelName] = billing_setting.BillingModeTaskUnitTier
+						taskUnitTierPriceMap[item.ModelName] = item.TaskUnitTierPrice
 					}
 					continue
 				}
@@ -590,6 +608,9 @@ func FetchUpstreamRatios(c *gin.Context) {
 			if len(videoTokenPriceMap) > 0 {
 				converted[billing_setting.VideoTokenPriceField] = valueMap(videoTokenPriceMap)
 			}
+			if len(taskUnitTierPriceMap) > 0 {
+				converted[billing_setting.TaskUnitTierPriceField] = valueMap(taskUnitTierPriceMap)
+			}
 
 			ch <- upstreamResult{Name: uniqueName, Data: converted}
 		}(chn)
@@ -619,6 +640,7 @@ func FetchUpstreamRatios(c *gin.Context) {
 				Status: "success",
 			})
 			dropUnpricedVideoTokenMode(r.Data)
+			dropUnpricedTaskUnitTierMode(r.Data)
 			successfulChannels = append(successfulChannels, struct {
 				name string
 				data map[string]any

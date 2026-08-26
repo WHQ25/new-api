@@ -54,18 +54,33 @@ func (a *TaskAdaptor) BuildRequestHeader(_ *gin.Context, req *http.Request, _ *r
 
 // BuildRequestBody marshals the TaskSubmitReq as-is to upstream.
 func (a *TaskAdaptor) BuildRequestBody(c *gin.Context, info *relaycommon.RelayInfo) (io.Reader, error) {
+	if storage, err := common.GetBodyStorage(c); err == nil {
+		if cached, err := storage.Bytes(); err == nil && len(cached) > 0 {
+			var bodyMap map[string]any
+			if err := common.Unmarshal(cached, &bodyMap); err == nil {
+				if info.IsModelMapped {
+					bodyMap["model"] = info.UpstreamModelName
+				} else if modelName, _ := bodyMap["model"].(string); modelName != "" {
+					info.UpstreamModelName = modelName
+				}
+				data, err := common.Marshal(bodyMap)
+				if err != nil {
+					return nil, errors.Wrap(err, "marshal task request failed")
+				}
+				return bytes.NewReader(data), nil
+			}
+		}
+	}
+
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
 		return nil, err
 	}
-
-	// Map model if needed
 	if info.IsModelMapped {
 		req.Model = info.UpstreamModelName
 	} else if req.Model != "" {
 		info.UpstreamModelName = req.Model
 	}
-
 	data, err := common.Marshal(req)
 	if err != nil {
 		return nil, errors.Wrap(err, "marshal task request failed")

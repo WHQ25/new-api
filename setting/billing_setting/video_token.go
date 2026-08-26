@@ -4,8 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/samber/lo"
 )
 
 // ErrVideoTokenResolutionRequired is returned when a video_token request has no
@@ -75,33 +73,26 @@ func IsVideoTokenBilling(model string) bool {
 }
 
 func GetVideoTokenPriceCopy() map[string]map[string]float64 {
-	src := billingSetting.VideoTokenPrice
-	if len(src) == 0 {
-		return map[string]map[string]float64{}
-	}
-	out := make(map[string]map[string]float64, len(src))
-	for model, table := range src {
-		out[model] = lo.Assign(table)
-	}
-	return out
+	return CurrentView().VideoTokenMap()
 }
 
 func GetVideoTokenPriceTable(model string) map[string]float64 {
-	if table, ok := billingSetting.VideoTokenPrice[model]; ok && len(table) > 0 {
-		return lo.Assign(table)
-	}
-	return nil
+	return CurrentView().VideoTokenTable(model)
 }
 
 // LookupVideoTokenPrice returns the configured USD-per-1M-token price for a
 // tariff cell. Missing or non-positive prices are an error so callers reject
 // the request instead of silently undercharging.
 func LookupVideoTokenPrice(model, resolution string, hasVideo bool) (float64, string, error) {
+	return CurrentView().LookupVideoTokenPrice(model, resolution, hasVideo)
+}
+
+func (v View) LookupVideoTokenPrice(model, resolution string, hasVideo bool) (float64, string, error) {
 	key, err := VideoTokenPriceKey(resolution, hasVideo)
 	if err != nil {
 		return 0, "", err
 	}
-	table := GetVideoTokenPriceTable(model)
+	table := v.VideoTokenTable(model)
 	if len(table) == 0 {
 		return 0, key, fmt.Errorf("video token price is not configured for model %s", model)
 	}
@@ -113,7 +104,10 @@ func LookupVideoTokenPrice(model, resolution string, hasVideo bool) (float64, st
 }
 
 func HasVideoTokenPrice(model string) bool {
-	table := GetVideoTokenPriceTable(model)
+	return HasVideoTokenPriceFromTable(GetVideoTokenPriceTable(model))
+}
+
+func HasVideoTokenPriceFromTable(table map[string]float64) bool {
 	for _, price := range table {
 		if price > 0 {
 			return true

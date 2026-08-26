@@ -216,15 +216,21 @@ func TaskErrorWrapper(err error, code string, statusCode int) *taskdto.TaskError
 	return taskError
 }
 
-// TaskErrorFromAPIError 将 PreConsumeBilling 返回的 NewAPIError 转换为 TaskError。
 func TaskErrorFromAPIError(apiErr *types.NewAPIError) *taskdto.TaskError {
 	if apiErr == nil {
 		return nil
 	}
-	return &taskdto.TaskError{
-		Code:       string(apiErr.GetErrorCode()),
-		Message:    apiErr.Err.Error(),
-		StatusCode: apiErr.StatusCode,
-		Error:      apiErr.Err,
+	err := apiErr.Err
+	if err == nil {
+		err = errors.New(apiErr.Error())
 	}
+	statusCode := apiErr.StatusCode
+	if statusCode == 0 {
+		statusCode = http.StatusInternalServerError
+	}
+	code := string(apiErr.GetErrorCode())
+	if types.IsSkipRetryError(apiErr) {
+		return TaskErrorWrapperLocal(err, code, statusCode)
+	}
+	return TaskErrorWrapper(err, code, statusCode)
 }

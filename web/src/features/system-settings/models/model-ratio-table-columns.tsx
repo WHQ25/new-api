@@ -100,6 +100,14 @@ export function buildModelRatioColumns({
               className='shrink-0'
             />
           )}
+          {row.original.billingMode === 'task_unit_tier' && (
+            <StatusBadge
+              label={t('Unit tiers')}
+              variant='info'
+              copyable={false}
+              className='shrink-0'
+            />
+          )}
           {row.original.hasConflict && (
             <StatusBadge
               label={t('Conflict')}

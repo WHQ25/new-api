@@ -76,12 +76,38 @@ import {
   useSystemOptions,
   getOptionValue,
 } from '@/features/system-settings/hooks/use-system-options'
-import { useUpdateOption } from '@/features/system-settings/hooks/use-update-option'
+
+import {
+  getTaskUnitTierRowErrors,
+  getTaskUnitTierValidationError,
+  taskUnitTierTableToRows,
+  type ModelRatioData,
+  type PricingMode,
+  type TaskUnitTierPriceTable,
+  type TaskUnitTierRow,
+} from '@/features/system-settings/models/model-pricing-core'
+import { TaskUnitTierPriceEditor } from '@/features/system-settings/models/model-pricing-inputs'
+import {
+  commitDrawerPricing,
+  mapsFromSettings,
+  pricingMapsToOptionValues,
+  readModelRatioDataFromMaps,
+} from '@/features/system-settings/models/model-pricing-persist'
 import { normalizeJsonString } from '@/features/system-settings/models/utils'
 import type { ModelSettings } from '@/features/system-settings/types'
-import { safeJsonParse } from '@/features/system-settings/utils/json-parser'
 
-import { createModel, updateModel, getModel, getVendors } from '../../api'
+import {
+  getModel,
+  getVendors,
+  saveModelWithPricing,
+} from '../../api'
+import {
+  drawerLockedPricingNoticeKey,
+  isDrawerLockedPricingMode,
+  modelDrawerOptionsStatusMessage,
+  resolveDrawerCommitPricingData,
+  shouldBlockModelDrawerSave,
+} from '../../lib/model-drawer-pricing'
 import { getNameRuleOptions, ENDPOINT_TEMPLATES } from '../../constants'
 import { modelsQueryKeys, vendorsQueryKeys, parseModelTags } from '../../lib'
 import type { Model } from '../../types'
@@ -109,7 +135,6 @@ const extendedModelFormSchema = z.object({
 
 type ExtendedModelFormValues = z.infer<typeof extendedModelFormSchema>
 
-type PricingMode = 'per-token' | 'per-request'
 type PricingSubMode = 'ratio' | 'price'
 
 type PricingFields = Pick<
@@ -130,6 +155,9 @@ type PricingConfig = {
   promptPrice: string
   completionPrice: string
   advancedOpen: boolean
+  taskUnitTierPrice: TaskUnitTierPriceTable
+  videoTokenPrice?: ModelRatioData['videoTokenPrice']
+  billingExpr?: string
 }
 
 const EMPTY_PRICING_FIELDS: PricingFields = {
@@ -148,81 +176,54 @@ const EMPTY_PRICING_CONFIG: PricingConfig = {
   promptPrice: '',
   completionPrice: '',
   advancedOpen: false,
+  taskUnitTierPrice: {},
 }
 
-function lookupModelRatio(
-  rawMap: string,
-  modelName: string
-): number | undefined {
-  return safeJsonParse<Record<string, number>>(rawMap, {
-    fallback: {},
-    silent: true,
-  })[modelName]
-}
-
-// Pricing is not stored on the model row: it lives in system options as
-// model-name keyed JSON maps, so it has to be read back out of those maps to
-// populate the form. Both create and edit rely on this, because submit rebuilds
-// the maps from the form and would otherwise drop pricing it never loaded.
 function readPricingConfig(
   settings: ModelSettings | null,
   modelName: string
 ): PricingConfig {
   if (!settings || !modelName) return EMPTY_PRICING_CONFIG
 
-  const price = lookupModelRatio(settings.ModelPrice, modelName)
-  const ratio = lookupModelRatio(settings.ModelRatio, modelName)
-  const cacheRatio = lookupModelRatio(settings.CacheRatio, modelName)
-  const completionRatio = lookupModelRatio(settings.CompletionRatio, modelName)
-  const imageRatio = lookupModelRatio(settings.ImageRatio, modelName)
-  const audioRatio = lookupModelRatio(settings.AudioRatio, modelName)
-  const audioCompletionRatio = lookupModelRatio(
-    settings.AudioCompletionRatio,
-    modelName
-  )
-
-  // A fixed per-request price wins outright at billing time (see
-  // GetModelRatioOrPrice), so a name that has one is shown, and saved back, as
-  // price-only: the ratios alongside it are dead weight.
-  if (price !== undefined && price !== null) {
-    return {
-      ...EMPTY_PRICING_CONFIG,
-      mode: 'per-request',
-      fields: { ...EMPTY_PRICING_FIELDS, price: price.toString() },
-    }
-  }
+  const maps = mapsFromSettings(settings)
+  const data = readModelRatioDataFromMaps(maps, modelName)
+  const ratio = data.ratio ? Number.parseFloat(data.ratio) : undefined
+  const completionRatio = data.completionRatio
+    ? Number.parseFloat(data.completionRatio)
+    : undefined
 
   let promptPrice = ''
   let completionPrice = ''
-  if (ratio !== undefined && ratio !== null) {
+  if (ratio !== undefined && !Number.isNaN(ratio)) {
     const tokenPrice = ratio * 2
     promptPrice = tokenPrice.toString()
-    if (completionRatio !== undefined && completionRatio !== null) {
+    if (completionRatio !== undefined && !Number.isNaN(completionRatio)) {
       completionPrice = (tokenPrice * completionRatio).toString()
     }
   }
 
   return {
-    mode: 'per-token',
+    mode: data.billingMode || 'per-token',
     fields: {
-      price: '',
-      ratio: ratio?.toString() || '',
-      cacheRatio: cacheRatio?.toString() || '',
-      completionRatio: completionRatio?.toString() || '',
-      imageRatio: imageRatio?.toString() || '',
-      audioRatio: audioRatio?.toString() || '',
-      audioCompletionRatio: audioCompletionRatio?.toString() || '',
+      price: data.price || '',
+      ratio: data.ratio || '',
+      cacheRatio: data.cacheRatio || '',
+      completionRatio: data.completionRatio || '',
+      imageRatio: data.imageRatio || '',
+      audioRatio: data.audioRatio || '',
+      audioCompletionRatio: data.audioCompletionRatio || '',
     },
     promptPrice,
     completionPrice,
-    // Configured is not the same as non-zero: a 0 ratio (free cache reads, for
-    // instance) still has to be visible rather than hidden behind the collapse.
-    advancedOpen: [
-      cacheRatio,
-      imageRatio,
-      audioRatio,
-      audioCompletionRatio,
-    ].some((value) => value !== undefined && value !== null),
+    advancedOpen: Boolean(
+      data.cacheRatio ||
+        data.imageRatio ||
+        data.audioRatio ||
+        data.audioCompletionRatio
+    ),
+    taskUnitTierPrice: data.taskUnitTierPrice || {},
+    videoTokenPrice: data.videoTokenPrice,
+    billingExpr: data.billingExpr,
   }
 }
 
@@ -248,6 +249,15 @@ export function ModelMutateDrawer({
   const [promptPrice, setPromptPrice] = useState('')
   const [completionPrice, setCompletionPrice] = useState('')
   const [oldModelName, setOldModelName] = useState<string>('')
+  const [taskUnitTierRows, setTaskUnitTierRows] = useState<TaskUnitTierRow[]>(
+    () => taskUnitTierTableToRows()
+  )
+  const taskUnitTierRowErrors = useMemo(
+    () => getTaskUnitTierRowErrors(taskUnitTierRows),
+    [taskUnitTierRows]
+  )
+  const [loadedPricingData, setLoadedPricingData] =
+    useState<ModelRatioData | null>(null)
   // Model name whose pricing was read into the form when the drawer opened.
   // Submit may only rewrite pricing for this name, or for a name the user
   // explicitly priced; anything else it never saw and must leave alone.
@@ -279,9 +289,10 @@ export function ModelMutateDrawer({
   })
 
   // Fetch system options for ratio configuration
-  const { data: systemOptionsData } = useSystemOptions()
+  const optionsQuery = useSystemOptions()
+  const systemOptionsData = optionsQuery.data
 
-  const updateOption = useUpdateOption()
+
 
   // Get model settings from system options
   const modelSettings = useMemo(() => {
@@ -314,6 +325,7 @@ export function ModelMutateDrawer({
       'billing_setting.billing_mode': '{}',
       'billing_setting.billing_expr': '{}',
       'billing_setting.video_token_price': '{}',
+      'billing_setting.task_unit_tier_price': '{}',
       'tool_price_setting.prices': '{}',
       TopupGroupRatio: '',
       GroupRatio: '',
@@ -427,6 +439,15 @@ export function ModelMutateDrawer({
       setPromptPrice(pricing.promptPrice)
       setCompletionPrice(pricing.completionPrice)
       setAdvancedOpen(pricing.advancedOpen)
+      setTaskUnitTierRows(taskUnitTierTableToRows(pricing.taskUnitTierPrice))
+      setLoadedPricingData(
+        modelSettingsRef.current
+          ? readModelRatioDataFromMaps(
+              mapsFromSettings(modelSettingsRef.current),
+              model.model_name
+            )
+          : null
+      )
       form.reset({
         id: model.id,
         model_name: model.model_name,
@@ -453,6 +474,15 @@ export function ModelMutateDrawer({
       setPromptPrice(pricing.promptPrice)
       setCompletionPrice(pricing.completionPrice)
       setAdvancedOpen(pricing.advancedOpen)
+      setTaskUnitTierRows(taskUnitTierTableToRows(pricing.taskUnitTierPrice))
+      setLoadedPricingData(
+        modelSettingsRef.current && modelName
+          ? readModelRatioDataFromMaps(
+              mapsFromSettings(modelSettingsRef.current),
+              modelName
+            )
+          : null
+      )
       form.reset({
         model_name: modelName,
         description: '',
@@ -470,6 +500,42 @@ export function ModelMutateDrawer({
 
   const onSubmit = useCallback(
     async (values: ExtendedModelFormValues): Promise<void> => {
+      if (
+        shouldBlockModelDrawerSave({
+          optionsStatus: optionsQuery.isError
+            ? 'error'
+            : optionsQuery.isSuccess
+              ? 'success'
+              : 'pending',
+          hasSettings: Boolean(modelSettings),
+          pricingMode,
+          rowErrors: taskUnitTierRowErrors,
+        })
+      ) {
+        toast.error(
+          t(
+            modelDrawerOptionsStatusMessage(
+              optionsQuery.isError
+                ? 'error'
+                : optionsQuery.isSuccess
+                  ? 'success'
+                  : 'pending',
+              Boolean(modelSettings)
+            ) || 'Unable to save model pricing'
+          )
+        )
+        return
+      }
+      if (
+        pricingMode === 'task_unit_tier' &&
+        !isDrawerLockedPricingMode(loadedPricingData?.billingMode)
+      ) {
+        const unitError = getTaskUnitTierValidationError(taskUnitTierRows)
+        if (unitError) {
+          toast.error(t(unitError))
+          return
+        }
+      }
       setIsSubmitting(true)
       try {
         const submitData = {
@@ -480,7 +546,6 @@ export function ModelMutateDrawer({
           sync_official: values.sync_official ? 1 : 0,
         }
 
-        // Remove ratio fields from model data (they're stored in system settings)
         const {
           price,
           ratio,
@@ -492,213 +557,69 @@ export function ModelMutateDrawer({
           ...modelData
         } = submitData
 
-        const response =
-          isEditing && currentModelId
-            ? await updateModel({ ...modelData, id: currentModelId })
-            : await createModel(modelData)
-
-        if (response.success) {
-          // Handle ratio configuration updates in system settings
-          const finalModelName = values.model_name
-          const hasRatioConfig =
-            (pricingMode === 'per-request' &&
-              values.price &&
-              values.price !== '') ||
-            (pricingMode === 'per-token' &&
-              (values.ratio ||
-                values.cacheRatio ||
-                values.completionRatio ||
-                values.imageRatio ||
-                values.audioRatio ||
-                values.audioCompletionRatio))
-
-          // Always process system settings updates if we have modelSettings
-          // This ensures we can remove stale entries even when clearing all pricing fields
-          if (modelSettings) {
-            // Read existing configurations
-            const priceMap = safeJsonParse<Record<string, number>>(
-              modelSettings.ModelPrice,
-              { fallback: {}, silent: true }
-            )
-            const ratioMap = safeJsonParse<Record<string, number>>(
-              modelSettings.ModelRatio,
-              { fallback: {}, silent: true }
-            )
-            const cacheMap = safeJsonParse<Record<string, number>>(
-              modelSettings.CacheRatio,
-              { fallback: {}, silent: true }
-            )
-            const completionMap = safeJsonParse<Record<string, number>>(
-              modelSettings.CompletionRatio,
-              { fallback: {}, silent: true }
-            )
-            const imageMap = safeJsonParse<Record<string, number>>(
-              modelSettings.ImageRatio,
-              { fallback: {}, silent: true }
-            )
-            const audioMap = safeJsonParse<Record<string, number>>(
-              modelSettings.AudioRatio,
-              { fallback: {}, silent: true }
-            )
-            const audioCompletionMap = safeJsonParse<Record<string, number>>(
-              modelSettings.AudioCompletionRatio,
-              { fallback: {}, silent: true }
-            )
-
-            // Remove old model name entries if model name changed (always, even if no new config)
-            if (isEditing && oldModelName && oldModelName !== finalModelName) {
-              delete priceMap[oldModelName]
-              delete ratioMap[oldModelName]
-              delete cacheMap[oldModelName]
-              delete completionMap[oldModelName]
-              delete imageMap[oldModelName]
-              delete audioMap[oldModelName]
-              delete audioCompletionMap[oldModelName]
-            }
-
-            // Rebuild this model name's entries from the form, but only when
-            // the form speaks for that name: it loaded the name's pricing when
-            // the drawer opened, so clearing every field means "remove
-            // pricing", or the user typed pricing in, which then wins outright
-            // (this is also what replaces the old entries across a mode
-            // switch). A name the form never loaded may still have pricing
-            // configured elsewhere, and an untouched pricing section must not
-            // wipe it -- that covers creating a model over an existing name,
-            // and renaming onto one.
-            if (hasRatioConfig || finalModelName === loadedPricingName) {
-              delete priceMap[finalModelName]
-              delete ratioMap[finalModelName]
-              delete cacheMap[finalModelName]
-              delete completionMap[finalModelName]
-              delete imageMap[finalModelName]
-              delete audioMap[finalModelName]
-              delete audioCompletionMap[finalModelName]
-            }
-
-            // Only add new entries if user provided new configuration
-            if (hasRatioConfig) {
-              if (
-                pricingMode === 'per-request' &&
-                values.price &&
-                values.price !== ''
-              ) {
-                priceMap[finalModelName] = Number.parseFloat(values.price)
-              } else if (pricingMode === 'per-token') {
-                if (values.ratio && values.ratio !== '') {
-                  ratioMap[finalModelName] = Number.parseFloat(values.ratio)
-                }
-                if (values.cacheRatio && values.cacheRatio !== '') {
-                  cacheMap[finalModelName] = Number.parseFloat(
-                    values.cacheRatio
-                  )
-                }
-                if (values.completionRatio && values.completionRatio !== '') {
-                  completionMap[finalModelName] = Number.parseFloat(
-                    values.completionRatio
-                  )
-                }
-                if (values.imageRatio && values.imageRatio !== '') {
-                  imageMap[finalModelName] = Number.parseFloat(
-                    values.imageRatio
-                  )
-                }
-                if (values.audioRatio && values.audioRatio !== '') {
-                  audioMap[finalModelName] = Number.parseFloat(
-                    values.audioRatio
-                  )
-                }
-                if (
-                  values.audioCompletionRatio &&
-                  values.audioCompletionRatio !== ''
-                ) {
-                  audioCompletionMap[finalModelName] = Number.parseFloat(
-                    values.audioCompletionRatio
-                  )
-                }
-              }
-            }
-
-            // Update system options if there are changes
-            const updates: Array<{ key: string; value: string }> = []
-
-            const newModelPrice = normalizeJsonString(JSON.stringify(priceMap))
-            if (
-              newModelPrice !== normalizeJsonString(modelSettings.ModelPrice)
-            ) {
-              updates.push({ key: 'ModelPrice', value: newModelPrice })
-            }
-
-            const newModelRatio = normalizeJsonString(JSON.stringify(ratioMap))
-            if (
-              newModelRatio !== normalizeJsonString(modelSettings.ModelRatio)
-            ) {
-              updates.push({ key: 'ModelRatio', value: newModelRatio })
-            }
-
-            const newCacheRatio = normalizeJsonString(JSON.stringify(cacheMap))
-            if (
-              newCacheRatio !== normalizeJsonString(modelSettings.CacheRatio)
-            ) {
-              updates.push({ key: 'CacheRatio', value: newCacheRatio })
-            }
-
-            const newCompletionRatio = normalizeJsonString(
-              JSON.stringify(completionMap)
-            )
-            if (
-              newCompletionRatio !==
-              normalizeJsonString(modelSettings.CompletionRatio)
-            ) {
-              updates.push({
-                key: 'CompletionRatio',
-                value: newCompletionRatio,
-              })
-            }
-
-            const newImageRatio = normalizeJsonString(JSON.stringify(imageMap))
-            if (
-              newImageRatio !== normalizeJsonString(modelSettings.ImageRatio)
-            ) {
-              updates.push({ key: 'ImageRatio', value: newImageRatio })
-            }
-
-            const newAudioRatio = normalizeJsonString(JSON.stringify(audioMap))
-            if (
-              newAudioRatio !== normalizeJsonString(modelSettings.AudioRatio)
-            ) {
-              updates.push({ key: 'AudioRatio', value: newAudioRatio })
-            }
-
-            const newAudioCompletionRatio = normalizeJsonString(
-              JSON.stringify(audioCompletionMap)
-            )
-            if (
-              newAudioCompletionRatio !==
-              normalizeJsonString(modelSettings.AudioCompletionRatio)
-            ) {
-              updates.push({
-                key: 'AudioCompletionRatio',
-                value: newAudioCompletionRatio,
-              })
-            }
-
-            // Apply all updates (including deletions when clearing fields)
-            for (const update of updates) {
-              await updateOption.mutateAsync(update)
-            }
-          }
-
-          toast.success(
-            isEditing
-              ? 'Model updated successfully'
-              : 'Model created successfully'
-          )
-          queryClient.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
-          queryClient.invalidateQueries({ queryKey: ['system-options'] })
-          onOpenChange(false)
-        } else {
-          toast.error(response.message || 'Operation failed')
+        const finalModelName = values.model_name
+        const table: Record<string, string> = {}
+        for (const row of taskUnitTierRows) {
+          const key = row.key.trim()
+          if (key) table[key] = row.price
         }
+        const pricingMaps = mapsFromSettings(modelSettings!)
+        const existingLockedMode = pricingMaps.billingMode[finalModelName]
+        const typedPricing = Boolean(
+          values.price?.trim() || values.ratio?.trim()
+        )
+        const next = commitDrawerPricing(pricingMaps, {
+          oldName: isEditing ? oldModelName : undefined,
+          newName: finalModelName,
+          loadedName: loadedPricingName,
+          data: resolveDrawerCommitPricingData({
+            loaded: loadedPricingData,
+            name: finalModelName,
+            pricingMode,
+            values: {
+              price: values.price,
+              ratio: values.ratio,
+              cacheRatio: values.cacheRatio,
+              completionRatio: values.completionRatio,
+              imageRatio: values.imageRatio,
+              audioRatio: values.audioRatio,
+              audioCompletionRatio: values.audioCompletionRatio,
+            },
+            taskUnitTierPrice: table,
+          }),
+        })
+        const options: Record<string, string> = {}
+        for (const [key, value] of Object.entries(
+          pricingMapsToOptionValues(next)
+        )) {
+          options[key] = normalizeJsonString(value)
+        }
+
+        await saveModelWithPricing({
+          model: {
+            ...modelData,
+            id: isEditing ? currentModelId : undefined,
+          },
+          options,
+        })
+
+        if (
+          !isEditing &&
+          !loadedPricingData &&
+          typedPricing &&
+          isDrawerLockedPricingMode(existingLockedMode)
+        ) {
+          const notice = drawerLockedPricingNoticeKey(existingLockedMode)
+          if (notice) toast.warning(t(notice))
+        }
+        toast.success(
+          isEditing
+            ? 'Model updated successfully'
+            : 'Model created successfully'
+        )
+        queryClient.invalidateQueries({ queryKey: modelsQueryKeys.lists() })
+        queryClient.invalidateQueries({ queryKey: ['system-options'] })
+        onOpenChange(false)
       } catch (error: unknown) {
         toast.error((error as Error)?.message || 'Operation failed')
       } finally {
@@ -711,10 +632,15 @@ export function ModelMutateDrawer({
       queryClient,
       onOpenChange,
       pricingMode,
+      taskUnitTierRows,
+      taskUnitTierRowErrors,
+      loadedPricingData,
       oldModelName,
       loadedPricingName,
       modelSettings,
-      updateOption,
+      optionsQuery.isError,
+      optionsQuery.isSuccess,
+      t,
     ]
   )
 
@@ -725,6 +651,10 @@ export function ModelMutateDrawer({
       form.setValue('endpoints', templateJson)
     }
   }
+
+  const lockedPricingNotice = drawerLockedPricingNoticeKey(
+    loadedPricingData?.billingMode ?? pricingMode
+  )
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -986,6 +916,12 @@ export function ModelMutateDrawer({
                 {t('Pricing Configuration')}
               </h3>
 
+              {lockedPricingNotice ? (
+                <p className='text-muted-foreground text-sm'>
+                  {t(lockedPricingNotice)}
+                </p>
+              ) : (
+                <>
               <div className='space-y-4'>
                 <Label>{t('Pricing mode')}</Label>
                 <RadioGroup
@@ -1006,10 +942,25 @@ export function ModelMutateDrawer({
                       {t('Per-request (fixed price)')}
                     </Label>
                   </div>
+                  <div className='flex items-center space-x-2'>
+                    <RadioGroupItem
+                      value='task_unit_tier'
+                      id='task_unit_tier'
+                    />
+                    <Label htmlFor='task_unit_tier' className='font-normal'>
+                      {t('Unit tiers')}
+                    </Label>
+                  </div>
                 </RadioGroup>
               </div>
 
-              {pricingMode === 'per-request' ? (
+              {pricingMode === 'task_unit_tier' ? (
+                <TaskUnitTierPriceEditor
+                  value={taskUnitTierRows}
+                  onChange={setTaskUnitTierRows}
+                  errors={taskUnitTierRowErrors}
+                />
+              ) : pricingMode === 'per-request' ? (
                 <FormField
                   control={form.control}
                   name='price'
@@ -1321,6 +1272,8 @@ export function ModelMutateDrawer({
                   </Collapsible>
                 </>
               )}
+                </>
+              )}
             </SideDrawerSection>
 
             {/* Status & Sync */}
@@ -1377,12 +1330,49 @@ export function ModelMutateDrawer({
         </Form>
 
         <SheetFooter className={sideDrawerFooterClassName()}>
+          {modelDrawerOptionsStatusMessage(
+            optionsQuery.isError
+              ? 'error'
+              : optionsQuery.isSuccess
+                ? 'success'
+                : 'pending',
+            Boolean(modelSettings)
+          ) ? (
+            <p className='text-muted-foreground w-full text-xs'>
+              {t(
+                modelDrawerOptionsStatusMessage(
+                  optionsQuery.isError
+                    ? 'error'
+                    : optionsQuery.isSuccess
+                      ? 'success'
+                      : 'pending',
+                  Boolean(modelSettings)
+                ) || ''
+              )}
+            </p>
+          ) : null}
           <SheetClose
             render={<Button variant='outline' disabled={isSubmitting} />}
           >
             {t('Cancel')}
           </SheetClose>
-          <Button form='model-form' type='submit' disabled={isSubmitting}>
+          <Button
+            form='model-form'
+            type='submit'
+            disabled={
+              isSubmitting ||
+              shouldBlockModelDrawerSave({
+                optionsStatus: optionsQuery.isError
+                  ? 'error'
+                  : optionsQuery.isSuccess
+                    ? 'success'
+                    : 'pending',
+                hasSettings: Boolean(modelSettings),
+                pricingMode,
+                rowErrors: taskUnitTierRowErrors,
+              })
+            }
+          >
             {isSubmitting && <Loader2 className='mr-2 h-4 w-4 animate-spin' />}
             {isEditing ? t('Update Model') : t('Save changes')}
           </Button>

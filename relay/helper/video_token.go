@@ -51,13 +51,13 @@ type videoTokenEstimate struct {
 	AspectRatio string
 }
 
-func ModelPriceHelperVideoToken(c *gin.Context, info *relaycommon.RelayInfo) (hosttypes.PriceData, error) {
+func ModelPriceHelperVideoToken(c *gin.Context, info *relaycommon.RelayInfo, view billing_setting.View) (hosttypes.PriceData, error) {
 	groupRatioInfo := HandleGroupRatio(c, info)
 	req, err := relaycommon.GetTaskRequest(c)
 	if err != nil {
 		return hosttypes.PriceData{}, err
 	}
-	estimate, err := estimateVideoTokenBilling(info.OriginModelName, req)
+	estimate, err := estimateVideoTokenBilling(info.OriginModelName, req, view)
 	if err != nil {
 		return hosttypes.PriceData{}, err
 	}
@@ -67,8 +67,10 @@ func ModelPriceHelperVideoToken(c *gin.Context, info *relaycommon.RelayInfo) (ho
 	if err != nil {
 		return hosttypes.PriceData{}, err
 	}
+	quota, freeModel := applyFreeGroupQuota(groupRatioInfo.GroupRatio, quota)
 
 	return hosttypes.PriceData{
+		FreeModel:         freeModel,
 		ModelPrice:        estimate.USDPerM,
 		UsePrice:          false,
 		Quota:             quota,
@@ -81,7 +83,7 @@ func ModelPriceHelperVideoToken(c *gin.Context, info *relaycommon.RelayInfo) (ho
 	}, nil
 }
 
-func estimateVideoTokenBilling(modelName string, req relaycommon.TaskSubmitReq) (videoTokenEstimate, error) {
+func estimateVideoTokenBilling(modelName string, req relaycommon.TaskSubmitReq, view billing_setting.View) (videoTokenEstimate, error) {
 	resolution := metadataString(req.Metadata, "resolution")
 	aspect := metadataString(req.Metadata, "ratio")
 	if aspect == "" {
@@ -104,7 +106,7 @@ func estimateVideoTokenBilling(modelName string, req relaycommon.TaskSubmitReq) 
 	}
 
 	tokens := EstimateSeedanceTokens(resolution, aspect, outSeconds, inSeconds, hasVideo)
-	price, tier, err := billing_setting.LookupVideoTokenPrice(modelName, resolution, hasVideo)
+	price, tier, err := view.LookupVideoTokenPrice(modelName, resolution, hasVideo)
 	if err != nil {
 		return videoTokenEstimate{}, err
 	}

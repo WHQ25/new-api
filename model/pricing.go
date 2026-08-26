@@ -36,6 +36,7 @@ type Pricing struct {
 	BillingMode            string                  `json:"billing_mode,omitempty"`
 	BillingExpr            string                  `json:"billing_expr,omitempty"`
 	VideoTokenPrice        map[string]float64      `json:"video_token_price,omitempty"`
+	TaskUnitTierPrice      map[string]float64      `json:"task_unit_tier_price,omitempty"`
 	PricingVersion         string                  `json:"pricing_version,omitempty"`
 }
 
@@ -356,6 +357,7 @@ func updatePricing() {
 	}
 
 	pricingMap = make([]Pricing, 0)
+	billingView := billing_setting.CurrentView()
 	for model, groups := range modelGroupsMap {
 		pricing := Pricing{
 			ModelName:              model,
@@ -375,9 +377,16 @@ func updatePricing() {
 			pricing.VendorID = meta.VendorID
 		}
 		modelPrice, findPrice := ratio_setting.GetModelPrice(model, false)
-		if billing_setting.IsVideoTokenBilling(model) {
+		billingMode := billingView.Mode(model)
+		if billingMode == billing_setting.BillingModeTaskUnitTier {
+			pricing.BillingMode = billing_setting.BillingModeTaskUnitTier
+			if table := billingView.TaskUnitTable(model); len(table) > 0 {
+				pricing.TaskUnitTierPrice = table
+			}
+			pricing.QuotaType = 1
+		} else if billingMode == billing_setting.BillingModeVideoToken {
 			pricing.BillingMode = billing_setting.BillingModeVideoToken
-			if table := billing_setting.GetVideoTokenPriceTable(model); len(table) > 0 {
+			if table := billingView.VideoTokenTable(model); len(table) > 0 {
 				pricing.VideoTokenPrice = table
 			}
 			pricing.QuotaType = 0
@@ -407,8 +416,8 @@ func updatePricing() {
 			audioCompletionRatio := ratio_setting.GetAudioCompletionRatio(model)
 			pricing.AudioCompletionRatio = &audioCompletionRatio
 		}
-		if billingMode := billing_setting.GetBillingMode(model); billingMode == "tiered_expr" {
-			if expr, ok := billing_setting.GetBillingExpr(model); ok && strings.TrimSpace(expr) != "" {
+		if billingMode == billing_setting.BillingModeTieredExpr {
+			if expr, ok := billingView.Expr(model); ok && strings.TrimSpace(expr) != "" {
 				pricing.BillingMode = billingMode
 				pricing.BillingExpr = expr
 			}

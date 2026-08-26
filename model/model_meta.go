@@ -45,39 +45,47 @@ type Model struct {
 }
 
 func (mi *Model) Insert() error {
+	return mi.InsertTx(DB)
+}
+
+func (mi *Model) InsertTx(tx *gorm.DB) error {
 	now := common.GetTimestamp()
 	mi.CreatedTime = now
 	mi.UpdatedTime = now
 
-	// 保存原始值（因为 Create 后可能被 GORM 的 default 标签覆盖为 1）
 	originalStatus := mi.Status
 	originalSyncOfficial := mi.SyncOfficial
 
-	// 先创建记录（GORM 会对零值字段应用默认值）
-	if err := DB.Create(mi).Error; err != nil {
+	if err := tx.Create(mi).Error; err != nil {
 		return err
 	}
 
-	// 使用保存的原始值进行更新，确保零值能正确保存
-	return DB.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]interface{}{
+	return tx.Model(&Model{}).Where("id = ?", mi.Id).Updates(map[string]interface{}{
 		"status":        originalStatus,
 		"sync_official": originalSyncOfficial,
 	}).Error
 }
 
 func IsModelNameDuplicated(id int, name string) (bool, error) {
+	return IsModelNameDuplicatedTx(DB, id, name)
+}
+
+func IsModelNameDuplicatedTx(tx *gorm.DB, id int, name string) (bool, error) {
 	if name == "" {
 		return false, nil
 	}
 	var cnt int64
-	err := DB.Model(&Model{}).Where("model_name = ? AND id <> ?", name, id).Count(&cnt).Error
+	err := tx.Model(&Model{}).Where("model_name = ? AND id <> ?", name, id).Count(&cnt).Error
 	return cnt > 0, err
 }
 
 func (mi *Model) Update() error {
+	return mi.UpdateTx(DB)
+}
+
+func (mi *Model) UpdateTx(tx *gorm.DB) error {
 	mi.UpdatedTime = common.GetTimestamp()
-	// 使用 Select 强制更新所有字段，包括零值
-	return DB.Model(&Model{}).Where("id = ?", mi.Id).
+	return tx.Model(&Model{}).Where("id = ?", mi.Id).
 		Select("model_name", "description", "icon", "tags", "vendor_id", "endpoints", "status", "sync_official", "name_rule", "updated_time").
 		Updates(mi).Error
 }

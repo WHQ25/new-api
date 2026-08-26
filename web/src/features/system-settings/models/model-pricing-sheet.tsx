@@ -71,7 +71,10 @@ import {
   createInitialLaneState,
   createModelPricingSchema,
   emptyVideoTokenPriceTable,
+  getTaskUnitTierRowErrors,
+  getTaskUnitTierValidationError,
   hasValue,
+  taskUnitTierTableToRows,
   laneConfigs,
   numericDraftRegex,
   ratioFieldByLane,
@@ -80,11 +83,14 @@ import {
   type ModelPricingFormValues,
   type ModelRatioData,
   type PricingMode,
+  type TaskUnitTierRow,
   type VideoTokenPriceTable,
 } from './model-pricing-core'
+import { resolveEditorPricingMode } from './model-pricing-persist'
 import {
   PriceInput,
   PriceLane,
+  TaskUnitTierPriceEditor,
   VideoTokenPriceGrid,
 } from './model-pricing-inputs'
 import { formatPricingNumber } from './pricing-format'
@@ -165,6 +171,13 @@ export const ModelPricingEditorPanel = forwardRef<
   const [videoTokenPrice, setVideoTokenPrice] = useState<VideoTokenPriceTable>(
     emptyVideoTokenPriceTable()
   )
+  const [taskUnitTierRows, setTaskUnitTierRows] = useState<TaskUnitTierRow[]>(
+    () => taskUnitTierTableToRows()
+  )
+  const taskUnitTierRowErrors = useMemo(
+    () => getTaskUnitTierRowErrors(taskUnitTierRows),
+    [taskUnitTierRows]
+  )
   const [editorReloadToken, setEditorReloadToken] = useState(0)
   const isEditMode = !!editData
 
@@ -198,21 +211,17 @@ export const ModelPricingEditorPanel = forwardRef<
         audioRatio: editData.audioRatio || '',
         audioCompletionRatio: editData.audioCompletionRatio || '',
       })
-      let nextMode: PricingMode = 'per-token'
-      if (
-        editData.billingMode === 'tiered_expr' ||
-        editData.billingMode === 'video_token'
-      ) {
-        nextMode = editData.billingMode
-      } else if (editData.price) {
-        nextMode = 'per-request'
-      }
+      const nextMode = resolveEditorPricingMode({
+        billingMode: editData.billingMode,
+        price: editData.price,
+      })
       setPricingMode(nextMode)
       setBillingExpr(editData.billingExpr || '')
       setRequestRuleExpr(editData.requestRuleExpr || '')
       setVideoTokenPrice(
         editData.videoTokenPrice || emptyVideoTokenPriceTable()
       )
+      setTaskUnitTierRows(taskUnitTierTableToRows(editData.taskUnitTierPrice))
     } else {
       form.reset({
         name: '',
@@ -229,6 +238,7 @@ export const ModelPricingEditorPanel = forwardRef<
       setBillingExpr('')
       setRequestRuleExpr('')
       setVideoTokenPrice(emptyVideoTokenPriceTable())
+      setTaskUnitTierRows(taskUnitTierTableToRows())
     }
 
     setPromptPrice(nextLaneState.promptPrice)
@@ -431,6 +441,11 @@ export const ModelPricingEditorPanel = forwardRef<
       nextWarnings.push(t('Fill at least one video tier price before saving.'))
     }
 
+    if (pricingMode === 'task_unit_tier') {
+      const unitTierError = getTaskUnitTierValidationError(taskUnitTierRows)
+      if (unitTierError) nextWarnings.push(t(unitTierError))
+    }
+
     return nextWarnings
   }, [
     editData,
@@ -439,6 +454,7 @@ export const ModelPricingEditorPanel = forwardRef<
     pricingMode,
     promptPrice,
     t,
+    taskUnitTierRows,
     videoTokenPrice,
   ])
 
@@ -477,6 +493,14 @@ export const ModelPricingEditorPanel = forwardRef<
       return false
     }
 
+    if (pricingMode === 'task_unit_tier') {
+      const unitTierError = getTaskUnitTierValidationError(taskUnitTierRows)
+      if (unitTierError) {
+        form.setError('name', { message: t(unitTierError) })
+        return false
+      }
+    }
+
     return true
   }, [
     form,
@@ -485,6 +509,7 @@ export const ModelPricingEditorPanel = forwardRef<
     pricingMode,
     promptPrice,
     t,
+    taskUnitTierRows,
     videoTokenPrice,
   ])
 
@@ -512,9 +537,24 @@ export const ModelPricingEditorPanel = forwardRef<
         data.videoTokenPrice = videoTokenPrice
       }
 
+      if (pricingMode === 'task_unit_tier') {
+        const table: Record<string, string> = {}
+        for (const row of taskUnitTierRows) {
+          const key = row.key.trim()
+          if (key) table[key] = row.price
+        }
+        data.taskUnitTierPrice = table
+      }
+
       return data
     },
-    [billingExpr, pricingMode, requestRuleExpr, videoTokenPrice]
+    [
+      billingExpr,
+      pricingMode,
+      requestRuleExpr,
+      taskUnitTierRows,
+      videoTokenPrice,
+    ]
   )
 
   useImperativeHandle(
@@ -598,7 +638,7 @@ export const ModelPricingEditorPanel = forwardRef<
                   onValueChange={handleModeChange}
                   className='gap-4'
                 >
-                  <TabsList className='grid w-full grid-cols-2 sm:grid-cols-4'>
+                  <TabsList className='grid w-full grid-cols-2 sm:grid-cols-3 lg:grid-cols-5'>
                     <TabsTrigger value='per-token'>
                       {t('Per-token')}
                     </TabsTrigger>
@@ -610,6 +650,9 @@ export const ModelPricingEditorPanel = forwardRef<
                     </TabsTrigger>
                     <TabsTrigger value='video_token'>
                       {t('Video tiers')}
+                    </TabsTrigger>
+                    <TabsTrigger value='task_unit_tier'>
+                      {t('Unit tiers')}
                     </TabsTrigger>
                   </TabsList>
 
@@ -724,6 +767,21 @@ export const ModelPricingEditorPanel = forwardRef<
                       </Field>
                     </FieldGroup>
                   </TabsContent>
+                  <TabsContent value='task_unit_tier' className='pt-0'>
+                    <FieldGroup className='gap-5'>
+                      <Field>
+                        <FieldLabel>{t('Unit tiers')}</FieldLabel>
+                        <FieldDescription>
+                          {t('USD per unit for each billing tier key.')}
+                        </FieldDescription>
+                        <TaskUnitTierPriceEditor
+                          value={taskUnitTierRows}
+                          onChange={setTaskUnitTierRows}
+                          errors={taskUnitTierRowErrors}
+                        />
+                      </Field>
+                    </FieldGroup>
+                  </TabsContent>
                 </Tabs>
               </FieldGroup>
 
@@ -760,7 +818,11 @@ export const ModelPricingEditorPanel = forwardRef<
                   <Button
                     type='button'
                     onClick={onSave}
-                    disabled={isSaving}
+                    disabled={
+                      isSaving ||
+                      (pricingMode === 'task_unit_tier' &&
+                        Object.keys(taskUnitTierRowErrors).length > 0)
+                    }
                     className='w-full sm:w-auto'
                   >
                     <Save data-icon='inline-start' />

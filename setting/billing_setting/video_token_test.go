@@ -50,3 +50,33 @@ func TestLookupVideoTokenPrice(t *testing.T) {
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrVideoTokenResolutionRequired)
 }
+
+func TestPrepareUpdatesRejectsVideoTokenWithoutPriceTable(t *testing.T) {
+	saved := map[string]string{}
+	require.NoError(t, config.GlobalConfig.SaveToDB(func(key, value string) error {
+		saved[key] = value
+		return nil
+	}))
+	t.Cleanup(func() {
+		require.NoError(t, config.GlobalConfig.LoadFromDB(saved))
+	})
+	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
+		"billing_setting.billing_mode":      `{}`,
+		"billing_setting.video_token_price": `{}`,
+	}))
+
+	_, err := PrepareUpdates(map[string]string{
+		BillingModeField:     `{"doubao-seedance-1-0-pro":"video_token"}`,
+		VideoTokenPriceField: `{}`,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "video token price is not configured")
+	assert.Contains(t, err.Error(), "doubao-seedance-1-0-pro")
+
+	prepared, err := PrepareUpdates(map[string]string{
+		BillingModeField:     `{"doubao-seedance-1-0-pro":"video_token"}`,
+		VideoTokenPriceField: `{"doubao-seedance-1-0-pro":{"480p":1.8,"720p":2.5,"1080p":4}}`,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, prepared)
+}

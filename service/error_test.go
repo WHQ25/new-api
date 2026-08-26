@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -158,4 +159,32 @@ func withDebugEnabled(t *testing.T, enabled bool) {
 	t.Cleanup(func() {
 		common.DebugEnabled = oldDebug
 	})
+}
+
+func TestTaskErrorFromAPIErrorPreservesSkipRetryAsLocalError(t *testing.T) {
+	t.Parallel()
+
+	require.Nil(t, TaskErrorFromAPIError(nil))
+
+	skipErr := types.NewErrorWithStatusCode(
+		errors.New("订阅额度不足或未配置订阅: subscription used exceeds total"),
+		types.ErrorCodeInsufficientUserQuota,
+		http.StatusForbidden,
+		types.ErrOptionWithSkipRetry(),
+	)
+	got := TaskErrorFromAPIError(skipErr)
+	require.NotNil(t, got)
+	require.True(t, got.LocalError)
+	require.Equal(t, http.StatusForbidden, got.StatusCode)
+	require.Equal(t, string(types.ErrorCodeInsufficientUserQuota), got.Code)
+
+	retryable := types.NewErrorWithStatusCode(
+		errors.New("upstream 403"),
+		types.ErrorCodeBadResponseStatusCode,
+		http.StatusForbidden,
+	)
+	gotRetryable := TaskErrorFromAPIError(retryable)
+	require.NotNil(t, gotRetryable)
+	require.False(t, gotRetryable.LocalError)
+	require.Equal(t, http.StatusForbidden, gotRetryable.StatusCode)
 }

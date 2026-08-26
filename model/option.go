@@ -12,7 +12,6 @@ import (
 	"github.com/QuantumNous/new-api/setting/performance_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/setting/system_setting"
-	"gorm.io/gorm"
 )
 
 type Option struct {
@@ -188,13 +187,7 @@ func InitOptionMap() {
 }
 
 func loadOptionsFromDatabase() {
-	options, _ := AllOption()
-	for _, option := range options {
-		err := updateOptionMap(option.Key, option.Value)
-		if err != nil {
-			common.SysLog("failed to update option map: " + err.Error())
-		}
-	}
+	applyOptionsFromDatabase()
 }
 
 func SyncOptions(frequency int) {
@@ -216,60 +209,7 @@ func validateOptionValue(key string, value string) error {
 }
 
 func UpdateOption(key string, value string) error {
-	if err := validateOptionValue(key, value); err != nil {
-		return err
-	}
-	// Save to database first
-	option := Option{
-		Key: key,
-	}
-	// https://gorm.io/docs/update.html#Save-All-Fields
-	DB.FirstOrCreate(&option, Option{Key: key})
-	option.Value = value
-	// Save is a combination function.
-	// If save value does not contain primary key, it will execute Create,
-	// otherwise it will execute Update (with all fields).
-	DB.Save(&option)
-	// Update OptionMap
-	return updateOptionMap(key, value)
-}
-
-// UpdateOptionsBulk persists multiple key/value pairs in a single database
-// transaction, then dispatches them through updateOptionMap in one pass. If
-// any DB write fails the whole transaction rolls back and no in-memory state
-// is touched — safe for callers that must commit a set of related options
-// atomically (e.g. payment gateway binding).
-func UpdateOptionsBulk(values map[string]string) error {
-	if len(values) == 0 {
-		return nil
-	}
-	for key, value := range values {
-		if err := validateOptionValue(key, value); err != nil {
-			return err
-		}
-	}
-	err := DB.Transaction(func(tx *gorm.DB) error {
-		for k, v := range values {
-			option := Option{Key: k}
-			if err := tx.FirstOrCreate(&option, Option{Key: k}).Error; err != nil {
-				return err
-			}
-			option.Value = v
-			if err := tx.Save(&option).Error; err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	for k, v := range values {
-		if err := updateOptionMap(k, v); err != nil {
-			return err
-		}
-	}
-	return nil
+	return UpdateOptionsBulk(map[string]string{key: value})
 }
 
 func updateOptionMap(key string, value string) (err error) {
@@ -618,25 +558,23 @@ func handleConfigUpdate(key, value string) bool {
 	configName := parts[0]
 	configKey := parts[1]
 
-	// 获取配置对象
-	cfg := config.GlobalConfig.Get(configName)
-	if cfg == nil {
-		return false // 未注册的配置
+	if configName == "billing_setting" {
+		return true
 	}
 
-	// 更新配置
+	cfg := config.GlobalConfig.Get(configName)
+	if cfg == nil {
+		return false
+	}
+
 	configMap := map[string]string{
 		configKey: value,
 	}
 	config.UpdateConfigFromMap(cfg, configMap)
 
-	// 特定配置的后处理
 	if configName == "performance_setting" {
 		performance_setting.UpdateAndSync()
-	} else if configName == "billing_setting" {
-		InvalidatePricingCache()
-		ratio_setting.InvalidateExposedDataCache()
 	}
 
-	return true // 已处理
+	return true
 }

@@ -120,10 +120,13 @@ type TaskBillingContext struct {
 	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
 	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
 	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
-	BillingMode     string             `json:"billing_mode,omitempty"`      // ratio / video_token / ...
+	BillingMode     string             `json:"billing_mode,omitempty"`      // ratio / video_token / task_unit_tier / ...
 	VideoTokenPrice float64            `json:"video_token_price,omitempty"` // 提交时选中的档位单价（$/1M tokens）
 	VideoTokenTier  string             `json:"video_token_tier,omitempty"`  // 提交时选中的档位
 	EstimatedTokens float64            `json:"estimated_tokens,omitempty"`  // 提交时按像素公式估算的 token
+	TaskUnitTierKey string             `json:"task_unit_tier_key,omitempty"`
+	TaskUnitPrice   float64            `json:"task_unit_price,omitempty"`
+	TaskUnits       float64            `json:"task_units,omitempty"`
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）

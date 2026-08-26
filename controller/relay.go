@@ -597,12 +597,16 @@ func RelayTask(c *gin.Context) {
 			ModelRatio:      relayInfo.PriceData.ModelRatio,
 			OtherRatios:     relayInfo.PriceData.OtherRatios(),
 			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling: relayInfo.PriceData.BillingMode != billing_setting.BillingModeVideoToken &&
-				(common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice),
+			PerCallBilling: relayInfo.PriceData.BillingMode == billing_setting.BillingModeTaskUnitTier ||
+				(relayInfo.PriceData.BillingMode != billing_setting.BillingModeVideoToken &&
+					(common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice)),
 			BillingMode:     relayInfo.PriceData.BillingMode,
 			VideoTokenPrice: relayInfo.PriceData.VideoTokenPrice,
 			VideoTokenTier:  relayInfo.PriceData.VideoTokenTier,
 			EstimatedTokens: relayInfo.PriceData.EstimatedTokens,
+			TaskUnitTierKey: relayInfo.PriceData.TaskUnitTierKey,
+			TaskUnitPrice:   relayInfo.PriceData.TaskUnitPrice,
+			TaskUnits:       relayInfo.PriceData.TaskUnits,
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData
@@ -638,6 +642,9 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskEr
 	if _, ok := c.Get("specific_channel_id"); ok {
 		return false
 	}
+	if taskErr.LocalError {
+		return false
+	}
 	if taskErr.StatusCode == http.StatusTooManyRequests {
 		return true
 	}
@@ -656,9 +663,6 @@ func shouldRetryTaskRelay(c *gin.Context, channelId int, taskErr *taskdto.TaskEr
 	}
 	if taskErr.StatusCode == 408 {
 		// azure处理超时不重试
-		return false
-	}
-	if taskErr.LocalError {
 		return false
 	}
 	if taskErr.StatusCode/100 == 2 {

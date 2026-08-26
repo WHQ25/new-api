@@ -3,6 +3,7 @@ package service
 import (
 	"math"
 	"math/rand"
+	"net/http"
 	"testing"
 
 	"github.com/QuantumNous/new-api/model"
@@ -436,7 +437,7 @@ func TestPrepareTieredBillingForSelectedGroupPaidToFreeKeepsFreeModelFalse(t *te
 	assert.Equal(t, 50_000, relayInfo.FinalPreConsumedQuota)
 }
 
-func TestPrepareTieredBillingForSelectedGroupTopUpArrearsAllowsNegativeBalance(t *testing.T) {
+func TestPrepareTieredBillingForSelectedGroupTopUpInsufficientBlocks(t *testing.T) {
 	truncate(t)
 
 	const userID = 701
@@ -471,22 +472,13 @@ func TestPrepareTieredBillingForSelectedGroupTopUpArrearsAllowsNegativeBalance(t
 	}
 	relayInfo.Billing = session
 
-	require.Nil(t, PrepareTieredBillingForSelectedGroup(nil, relayInfo))
-
-	// Full reservation recorded; wallet charged the full delta into arrears.
-	assert.Equal(t, 100_000, session.GetPreConsumedQuota())
-	assert.Equal(t, 100_000, relayInfo.FinalPreConsumedQuota)
-	assert.Equal(t, 100_000, relayInfo.TieredBillingSnapshot.EstimatedQuotaAfterGroup)
+	apiErr := PrepareTieredBillingForSelectedGroup(nil, relayInfo)
+	require.NotNil(t, apiErr)
+	assert.Equal(t, http.StatusForbidden, apiErr.StatusCode)
+	assert.Equal(t, 50_000, session.GetPreConsumedQuota())
 	userQuota, err := model.GetUserQuota(userID, false)
 	require.NoError(t, err)
-	assert.Equal(t, -30_000, userQuota)
-
-	// Settlement still reconciles against the full reservation: actual 80k
-	// refunds the 20k over-reserve, landing at seed - (actual - initial) = -10k.
-	require.NoError(t, session.Settle(80_000))
-	userQuota, err = model.GetUserQuota(userID, false)
-	require.NoError(t, err)
-	assert.Equal(t, -10_000, userQuota)
+	assert.Equal(t, 20_000, userQuota)
 }
 
 func TestBillingSessionReserveWalletTopUpDecrementsBalance(t *testing.T) {

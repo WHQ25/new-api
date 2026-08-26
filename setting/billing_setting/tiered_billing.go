@@ -9,30 +9,35 @@ import (
 )
 
 const (
-	BillingModeRatio      = "ratio"
-	BillingModeTieredExpr = "tiered_expr"
-	BillingModeVideoToken = "video_token"
-	BillingModeField      = "billing_mode"
-	BillingExprField      = "billing_expr"
-	VideoTokenPriceField  = "video_token_price"
+	BillingModeRatio        = "ratio"
+	BillingModeTieredExpr   = "tiered_expr"
+	BillingModeVideoToken   = "video_token"
+	BillingModeTaskUnitTier = "task_unit_tier"
+	BillingModeField        = "billing_mode"
+	BillingExprField        = "billing_expr"
+	VideoTokenPriceField    = "video_token_price"
+	TaskUnitTierPriceField  = "task_unit_tier_price"
 )
 
 // BillingSetting is managed by config.GlobalConfig.Register.
 // DB keys: billing_setting.billing_mode, billing_setting.billing_expr,
-// billing_setting.video_token_price
+// billing_setting.video_token_price, billing_setting.task_unit_tier_price
 type BillingSetting struct {
-	BillingMode     map[string]string             `json:"billing_mode"`
-	BillingExpr     map[string]string             `json:"billing_expr"`
-	VideoTokenPrice map[string]map[string]float64 `json:"video_token_price"`
+	BillingMode       map[string]string             `json:"billing_mode"`
+	BillingExpr       map[string]string             `json:"billing_expr"`
+	VideoTokenPrice   map[string]map[string]float64 `json:"video_token_price"`
+	TaskUnitTierPrice map[string]map[string]float64 `json:"task_unit_tier_price"`
 }
 
 var billingSetting = BillingSetting{
-	BillingMode:     make(map[string]string),
-	BillingExpr:     make(map[string]string),
-	VideoTokenPrice: make(map[string]map[string]float64),
+	BillingMode:       make(map[string]string),
+	BillingExpr:       make(map[string]string),
+	VideoTokenPrice:   make(map[string]map[string]float64),
+	TaskUnitTierPrice: make(map[string]map[string]float64),
 }
 
 func init() {
+	publishSnapshot(emptySnapshot())
 	config.GlobalConfig.Register("billing_setting", &billingSetting)
 }
 
@@ -41,35 +46,35 @@ func init() {
 // ---------------------------------------------------------------------------
 
 func GetBillingMode(model string) string {
-	if mode, ok := billingSetting.BillingMode[model]; ok {
-		return mode
-	}
-	return BillingModeRatio
+	return CurrentView().Mode(model)
 }
 
 func GetBillingExpr(model string) (string, bool) {
-	expr, ok := billingSetting.BillingExpr[model]
-	return expr, ok
+	return CurrentView().Expr(model)
 }
 
 func GetBillingModeCopy() map[string]string {
-	return lo.Assign(billingSetting.BillingMode)
+	return CurrentView().ModeMap()
 }
 
 func GetBillingExprCopy() map[string]string {
-	return lo.Assign(billingSetting.BillingExpr)
+	return CurrentView().ExprMap()
 }
 
 func GetPricingSyncData(base map[string]any) map[string]any {
-	extra := make(map[string]any, 3)
-	if modes := GetBillingModeCopy(); len(modes) > 0 {
+	view := CurrentView()
+	extra := make(map[string]any, 4)
+	if modes := view.ModeMap(); len(modes) > 0 {
 		extra[BillingModeField] = modes
 	}
-	if exprs := GetBillingExprCopy(); len(exprs) > 0 {
+	if exprs := view.ExprMap(); len(exprs) > 0 {
 		extra[BillingExprField] = exprs
 	}
-	if prices := GetVideoTokenPriceCopy(); len(prices) > 0 {
+	if prices := view.VideoTokenMap(); len(prices) > 0 {
 		extra[VideoTokenPriceField] = prices
+	}
+	if prices := view.TaskUnitMap(); len(prices) > 0 {
+		extra[TaskUnitTierPriceField] = prices
 	}
 	return lo.Assign(base, extra)
 }

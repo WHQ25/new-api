@@ -40,9 +40,11 @@ import {
   formatRequestPrice,
   stripTrailingZeros,
 } from '../lib/price'
+import { isTaskUnitTierPricingModel } from '../lib/task-unit-tier-price'
 import { isVideoTokenPricingModel } from '../lib/video-token-price'
 import type { PricingModel, TokenUnit } from '../types'
 import { ModelBillingModeBadge } from './model-billing-mode-badge'
+import { TaskUnitTierPriceSummary } from './task-unit-tier-pricing'
 import { VideoTokenPriceSummary } from './video-token-pricing'
 
 // ----------------------------------------------------------------------------
@@ -181,6 +183,18 @@ export function usePricingColumns(
             <VideoTokenPriceSummary
               model={model}
               tokenUnit={tokenUnit}
+              showRechargePrice={showRechargePrice}
+              priceRate={priceRate}
+              usdExchangeRate={usdExchangeRate}
+              selectedGroup={selectedGroup}
+            />
+          )
+        }
+
+        if (isTaskUnitTierPricingModel(model)) {
+          return (
+            <TaskUnitTierPriceSummary
+              model={model}
               showRechargePrice={showRechargePrice}
               priceRate={priceRate}
               usdExchangeRate={usdExchangeRate}

@@ -27,7 +27,7 @@ import * as z from 'zod'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-import { resetModelRatios } from '../api'
+import { resetModelRatios, updateSystemOptions } from '../api'
 import { SettingsPageTitleStatusPortal } from '../components/settings-page-context'
 import { SettingsSection } from '../components/settings-section'
 import { useUpdateOption } from '../hooks/use-update-option'
@@ -118,6 +118,7 @@ const createModelSchema = (t: Translate) =>
     BillingMode: createJsonStringField(t),
     BillingExpr: createJsonStringField(t),
     VideoTokenPrice: createJsonStringField(t),
+    TaskUnitTierPrice: createJsonStringField(t),
   })
 
 const createGroupSchema = (t: Translate) =>
@@ -166,7 +167,9 @@ function parseJsonRecord(raw: string): Record<string, unknown> {
 function stripVideoTokenConflicts(values: ModelFormValues): ModelFormValues {
   const modes = parseJsonRecord(values.BillingMode)
   const videoModels = Object.entries(modes)
-    .filter(([, mode]) => mode === 'video_token')
+    .filter(
+      ([, mode]) => mode === 'video_token' || mode === 'task_unit_tier'
+    )
     .map(([name]) => name)
   if (videoModels.length === 0) {
     return values
@@ -246,6 +249,7 @@ export function RatioSettingsCard({
     BillingMode: normalizeJsonString(modelDefaults.BillingMode),
     BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
     VideoTokenPrice: normalizeJsonString(modelDefaults.VideoTokenPrice),
+    TaskUnitTierPrice: normalizeJsonString(modelDefaults.TaskUnitTierPrice),
   })
   const [savedModelValues, setSavedModelValues] = useState(
     modelNormalizedDefaults.current
@@ -284,6 +288,9 @@ export function RatioSettingsCard({
       BillingMode: formatJsonForTextarea(modelDefaults.BillingMode),
       BillingExpr: formatJsonForTextarea(modelDefaults.BillingExpr),
       VideoTokenPrice: formatJsonForTextarea(modelDefaults.VideoTokenPrice),
+      TaskUnitTierPrice: formatJsonForTextarea(
+        modelDefaults.TaskUnitTierPrice
+      ),
     },
   })
 
@@ -319,6 +326,7 @@ export function RatioSettingsCard({
       BillingMode: normalizeJsonString(modelDefaults.BillingMode),
       BillingExpr: normalizeJsonString(modelDefaults.BillingExpr),
       VideoTokenPrice: normalizeJsonString(modelDefaults.VideoTokenPrice),
+      TaskUnitTierPrice: normalizeJsonString(modelDefaults.TaskUnitTierPrice),
     }
     setSavedModelValues(modelNormalizedDefaults.current)
 
@@ -337,6 +345,9 @@ export function RatioSettingsCard({
       BillingMode: formatJsonForTextarea(modelDefaults.BillingMode),
       BillingExpr: formatJsonForTextarea(modelDefaults.BillingExpr),
       VideoTokenPrice: formatJsonForTextarea(modelDefaults.VideoTokenPrice),
+      TaskUnitTierPrice: formatJsonForTextarea(
+        modelDefaults.TaskUnitTierPrice
+      ),
     })
   }, [modelDefaults, modelForm])
 
@@ -383,12 +394,14 @@ export function RatioSettingsCard({
         BillingMode: normalizeJsonString(cleaned.BillingMode),
         BillingExpr: normalizeJsonString(cleaned.BillingExpr),
         VideoTokenPrice: normalizeJsonString(cleaned.VideoTokenPrice),
+        TaskUnitTierPrice: normalizeJsonString(cleaned.TaskUnitTierPrice),
       }
 
       const apiKeyMap: Record<string, string> = {
         BillingMode: 'billing_setting.billing_mode',
         BillingExpr: 'billing_setting.billing_expr',
         VideoTokenPrice: 'billing_setting.video_token_price',
+        TaskUnitTierPrice: 'billing_setting.task_unit_tier_price',
       }
 
       const updates = (
@@ -402,15 +415,19 @@ export function RatioSettingsCard({
         return
       }
 
+      const options: Record<string, string> = {}
       for (const key of updates) {
         const apiKey = apiKeyMap[key as string] || (key as string)
-        await updateOption.mutateAsync({ key: apiKey, value: normalized[key] })
+        options[apiKey] = String(normalized[key])
       }
+      await updateSystemOptions(options)
+      queryClient.invalidateQueries({ queryKey: ['system-options'] })
+      toast.success(t('Setting updated successfully'))
 
       modelNormalizedDefaults.current = normalized
       setSavedModelValues(normalized)
     },
-    [t, updateOption]
+    [queryClient, t]
   )
 
   const saveGroupRatios = useCallback(
@@ -516,6 +533,8 @@ export function RatioSettingsCard({
           'billing_setting.billing_mode': modelDefaults.BillingMode,
           'billing_setting.billing_expr': modelDefaults.BillingExpr,
           'billing_setting.video_token_price': modelDefaults.VideoTokenPrice,
+          'billing_setting.task_unit_tier_price':
+            modelDefaults.TaskUnitTierPrice,
         }}
       />
     )
