@@ -70,3 +70,34 @@ func TestGetEndpointTypesByChannelType(t *testing.T) {
 		})
 	}
 }
+
+// 模型广场详情页按 `Boolean(e.path)` 过滤调用示例，端点类型缺了默认路径就一个示例
+// 都不显示。任何会被 GetEndpointTypesByChannelType 返回的类型都必须有默认路径。
+func TestEveryReportedEndpointTypeHasADefaultPath(t *testing.T) {
+	channelTypes := []int{
+		constant.ChannelTypeOpenAI,
+		constant.ChannelTypeAnthropic,
+		constant.ChannelTypeAws,
+		constant.ChannelTypeGemini,
+		constant.ChannelTypeVertexAi,
+		constant.ChannelTypeJina,
+		constant.ChannelTypeXai,
+		constant.ChannelTypeOpenRouter,
+		constant.ChannelTypeSora,
+		constant.ChannelTypeKling,
+		constant.ChannelTypeVidu,
+		constant.ChannelTypeDoubaoVideo,
+		constant.ChannelTypeVolcEngine,
+		constant.ChannelTypeJimeng,
+		constant.ChannelTypeNewAPI,
+		constant.ChannelTypeSub2API,
+		constant.ChannelTypeCodex,
+	}
+	for _, channelType := range channelTypes {
+		for _, endpointType := range GetEndpointTypesByChannelType(channelType, "some-model") {
+			info, ok := GetDefaultEndpointInfo(endpointType)
+			assert.True(t, ok, "channel type %d reports %q with no default endpoint info", channelType, endpointType)
+			assert.NotEmpty(t, info.Path, "endpoint type %q has an empty default path", endpointType)
+		}
+	}
+}
