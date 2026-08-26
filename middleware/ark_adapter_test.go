@@ -2,6 +2,8 @@ package middleware
 
 import (
 	"bytes"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -121,13 +123,57 @@ func TestArkRequestConvertJoinsMultipleTextItems(t *testing.T) {
 	assert.Equal(t, "first\nsecond", converted["prompt"])
 }
 
-func TestArkRequestConvertKeepsNonPositiveDurationInMetadataOnly(t *testing.T) {
+func TestArkRequestConvertKeepsModelDecidedDurationInMetadataOnly(t *testing.T) {
 	// 方舟允许显式 -1 / 0 表示「由模型决定」。这类值提到顶层会被时长上界校验拒绝，
 	// 所以只留在 metadata 里透传给上游，不参与计费估算。
-	for _, duration := range []string{"-1", "0", "5.5", `"5"`} {
-		converted, _, _ := arkSubmit(t, `{"model":"m","content":[{"type":"text","text":"p"}],"duration":`+duration+`}`, okHandler)
+	for _, duration := range []string{"-1", "0"} {
+		converted, _, recorder := arkSubmit(t, `{"model":"m","content":[{"type":"text","text":"p"}],"duration":`+duration+`}`, okHandler)
+		require.Equal(t, http.StatusOK, recorder.Code)
 		assert.NotContains(t, converted, "duration", "duration=%s must not reach the top level", duration)
-		assert.Contains(t, converted["metadata"], "duration")
+		assert.Equal(t, duration, fmt.Sprint(int(converted["metadata"].(map[string]any)["duration"].(float64))))
+	}
+}
+
+// duration 与 frames 都会决定输出时长、进而成为计费乘数，必须在协议边界以 400 拦下。
+// 尤其是浮点 duration：内部 dto.IntValue 只接受整数和数字字符串，放行的话要到构建
+// 上游请求体时才失败，对调用方表现为 500。
+func TestArkRequestConvertRejectsOutOfContractNumbers(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"duration below -1", `{"model":"m","content":[{"type":"text","text":"p"}],"duration":-2}`},
+		{"duration above the task cap", `{"model":"m","content":[{"type":"text","text":"p"}],"duration":3601}`},
+		{"fractional duration", `{"model":"m","content":[{"type":"text","text":"p"}],"duration":5.5}`},
+		{"string duration", `{"model":"m","content":[{"type":"text","text":"p"}],"duration":"5"}`},
+		{"huge string duration", `{"model":"m","content":[{"type":"text","text":"p"}],"duration":"999999999999"}`},
+		{"frames below range", `{"model":"m","content":[{"type":"text","text":"p"}],"frames":25}`},
+		{"frames above range", `{"model":"m","content":[{"type":"text","text":"p"}],"frames":293}`},
+		{"frames off the 25+4n grid", `{"model":"m","content":[{"type":"text","text":"p"}],"frames":30}`},
+		{"fractional frames", `{"model":"m","content":[{"type":"text","text":"p"}],"frames":29.5}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine := newArkTestEngine(func(c *gin.Context) {
+				t.Fatal("handler must not run for an out-of-contract request")
+			})
+			req := httptest.NewRequest(http.MethodPost, ArkVideoTaskPath, bytes.NewBufferString(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			engine.ServeHTTP(recorder, req)
+			assert.Equal(t, http.StatusBadRequest, recorder.Code)
+		})
+	}
+}
+
+func TestArkRequestConvertAcceptsContractBoundaries(t *testing.T) {
+	for _, body := range []string{
+		`{"model":"m","content":[{"type":"text","text":"p"}],"duration":3600}`,
+		`{"model":"m","content":[{"type":"text","text":"p"}],"frames":29}`,
+		`{"model":"m","content":[{"type":"text","text":"p"}],"frames":289}`,
+	} {
+		_, _, recorder := arkSubmit(t, body, okHandler)
+		assert.Equal(t, http.StatusOK, recorder.Code, "body %s must be accepted", body)
 	}
 }
 
@@ -149,6 +195,17 @@ func TestArkSubmitResponseExposesOnlyPublicTaskID(t *testing.T) {
 	var response map[string]any
 	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.Equal(t, map[string]any{"id": "task_abc"}, response)
+}
+
+// 转换失败必须 fail-closed：内部形状里带着上游原始响应，直接回退会把上游任务 ID
+// 漏给调用方。
+func TestArkResponseFailsClosedWhenNotConvertible(t *testing.T) {
+	_, _, recorder := arkSubmit(t, `{"model":"m","content":[{"type":"text","text":"p"}]}`, func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"upstream": gin.H{"id": "cgt-20260826-secret"}})
+	})
+
+	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "cgt-20260826-secret")
 }
 
 func TestArkSubmitErrorResponsePassesThrough(t *testing.T) {
@@ -220,6 +277,32 @@ func TestArkFetchConvertsSucceededTask(t *testing.T) {
 	assert.NotContains(t, response, "error")
 }
 
+// content 只按官方文档定义的两个键取值：整体复制会把上游后续新增的任何字段
+// （包括可能的上游任务 ID）一并转发出去。
+func TestArkFetchContentIsWhitelisted(t *testing.T) {
+	internal := `{"code":"success","data":{"task_id":"task_abc","status":"SUCCESS","data":{
+		"status":"succeeded",
+		"content":{"video_url":"https://cdn/o.mp4","last_frame_url":"https://cdn/l.jpg","upstream_task_id":"cgt-leak"}
+	}}}`
+	_, response, recorder := arkFetch(t, "task_abc", internal)
+
+	assert.Equal(t, map[string]any{
+		"video_url":      "https://cdn/o.mp4",
+		"last_frame_url": "https://cdn/l.jpg",
+	}, response["content"])
+	assert.NotContains(t, recorder.Body.String(), "cgt-leak")
+}
+
+// 官方协议约定 error 仅在失败时出现；cancelled / expired 是「没跑完」而非「跑失败」。
+func TestArkFetchOmitsErrorForNonFailedTerminalStates(t *testing.T) {
+	for _, upstreamStatus := range []string{"cancelled", "expired"} {
+		internal := `{"code":"success","data":{"task_id":"task_abc","status":"FAILURE","data":{"status":"` + upstreamStatus + `"}}}`
+		_, response, _ := arkFetch(t, "task_abc", internal)
+		assert.Equal(t, upstreamStatus, response["status"])
+		assert.NotContains(t, response, "error")
+	}
+}
+
 func TestArkFetchFallsBackToLocalStatusBeforeFirstPoll(t *testing.T) {
 	// 首次轮询之前 task.Data 存的是提交响应，没有 status 字段，
 	// 此时必须用 new-api 自己的任务状态兜底，且不能泄露上游 ID。
@@ -288,4 +371,26 @@ func TestArkFetchRequiresTaskID(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	engine.ServeHTTP(recorder, req)
 	assert.Equal(t, http.StatusBadRequest, recorder.Code)
+}
+
+// 内层 defer 先于外层 Recovery 的 defer 执行。若 panic 时仍提交缓冲区，调用方会拿到
+// 一个 200 加半截 JSON，Recovery 再也改不成 500。
+func TestArkResponseDoesNotCommitOnPanic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	engine.Use(gin.RecoveryWithWriter(io.Discard))
+	group := engine.Group(ArkVideoTaskPath)
+	group.Use(ArkRequestConvert())
+	group.POST("", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"id": "task_abc"})
+		panic("relay exploded after writing")
+	})
+
+	req := httptest.NewRequest(http.MethodPost, ArkVideoTaskPath, bytes.NewBufferString(`{"model":"m","content":[{"type":"text","text":"p"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	recorder := httptest.NewRecorder()
+	engine.ServeHTTP(recorder, req)
+
+	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "task_abc")
 }

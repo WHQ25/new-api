@@ -68,6 +68,13 @@ const (
 	ContextKeyLanguage ContextKey = "language"
 	ContextKeyIsStream ContextKey = "is_stream"
 
+	// ContextKeyNativeTaskContent marks that the inbound request already carried a
+	// provider-native task content array (currently the Ark video protocol's
+	// `content`, delivered through metadata). Task adaptors must then keep that
+	// array verbatim instead of rebuilding it from the unified prompt/images
+	// fields, because the native protocol guarantees item order and roles.
+	ContextKeyNativeTaskContent ContextKey = "native_task_content"
+
 	// ContextKeyAuditLogged marks that the current request has already recorded
 	// a manage/operation audit log inside the handler. When set, the admin-audit
 	// fallback in authHelper (finishAdminAudit) skips its record to avoid

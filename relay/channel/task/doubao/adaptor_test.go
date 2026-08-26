@@ -6,6 +6,7 @@ import (
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
+	"github.com/samber/lo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -62,7 +63,7 @@ func TestConvertToRequestPayloadDurationMatchesBillingSource(t *testing.T) {
 			t.Parallel()
 
 			a := &TaskAdaptor{}
-			payload, err := a.convertToRequestPayload(&tc.req)
+			payload, err := a.convertToRequestPayload(&tc.req, false)
 			require.NoError(t, err)
 
 			assert.Equal(t, tc.want, payload.Duration)
@@ -171,7 +172,7 @@ func TestConvertToRequestPayloadPreservesArkContentRoles(t *testing.T) {
 	}
 
 	a := &TaskAdaptor{}
-	payload, err := a.convertToRequestPayload(&req)
+	payload, err := a.convertToRequestPayload(&req, false)
 	require.NoError(t, err)
 
 	require.Len(t, payload.Content, 5)
@@ -182,4 +183,64 @@ func TestConvertToRequestPayloadPreservesArkContentRoles(t *testing.T) {
 	// 上游只认顶层 prompt：metadata.content 里的 text 项被剔除后重新追加到末尾。
 	assert.Equal(t, ContentItem{Type: "text", Text: "keep the reference style"}, payload.Content[4])
 	assert.Equal(t, "720p", payload.Resolution)
+}
+
+// 方舟官方契约保证 content 按数组顺序处理并保留文本、素材及其 role。统一协议入站的
+// 口径（剔除 text 项、把顶层 prompt 追加到末尾）会移动文本位置，因此官方协议入站时
+// 由 ContextKeyNativeTaskContent 切换成原样下发。
+func TestConvertToRequestPayloadKeepsNativeContentOrder(t *testing.T) {
+	t.Parallel()
+
+	newReq := func() relaycommon.TaskSubmitReq {
+		return relaycommon.TaskSubmitReq{
+			Prompt: "joined prompt",
+			Metadata: map[string]any{
+				"content": []any{
+					map[string]any{"type": "text", "text": "lead in"},
+					map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://x/a.png"}, "role": "first_frame"},
+				},
+			},
+		}
+	}
+
+	a := &TaskAdaptor{}
+
+	native, err := a.convertToRequestPayload(lo.ToPtr(newReq()), true)
+	require.NoError(t, err)
+	require.Len(t, native.Content, 2)
+	assert.Equal(t, ContentItem{Type: "text", Text: "lead in"}, native.Content[0])
+	assert.Equal(t, ContentItem{Type: "image_url", ImageURL: &MediaURL{URL: "https://x/a.png"}, Role: "first_frame"}, native.Content[1])
+
+	unified, err := a.convertToRequestPayload(lo.ToPtr(newReq()), false)
+	require.NoError(t, err)
+	require.Len(t, unified.Content, 2)
+	assert.Equal(t, "image_url", unified.Content[0].Type)
+	assert.Equal(t, ContentItem{Type: "text", Text: "joined prompt"}, unified.Content[1])
+}
+
+// 官方请求体里的 omni_reference_task_type 与 output_format 只能经 metadata 到达
+// 适配器；typed 请求体漏掉它们就会静默丢弃，官方协议入站的调用方无从察觉。
+func TestConvertToRequestPayloadCarriesFullArkFieldSet(t *testing.T) {
+	t.Parallel()
+
+	req := relaycommon.TaskSubmitReq{
+		Prompt: "p",
+		Metadata: map[string]any{
+			"omni_reference_task_type": "i2v",
+			"output_format":            "mp4",
+			"frames":                   121,
+			"safety_identifier":        "user-1",
+			"service_tier":             "default",
+		},
+	}
+
+	a := &TaskAdaptor{}
+	payload, err := a.convertToRequestPayload(&req, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, "i2v", payload.OmniReferenceTaskType)
+	assert.Equal(t, "mp4", payload.OutputFormat)
+	assert.Equal(t, ptrIntValue(121), payload.Frames)
+	assert.Equal(t, "user-1", payload.SafetyIdentifier)
+	assert.Equal(t, "default", payload.ServiceTier)
 }
