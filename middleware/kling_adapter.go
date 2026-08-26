@@ -1,10 +1,6 @@
 package middleware
 
 import (
-	"bytes"
-	"encoding/json"
-	"io"
-
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/constant"
 
@@ -32,21 +28,22 @@ func KlingRequestConvert() func(c *gin.Context) {
 			"metadata": originalReq,
 		}
 
-		jsonData, err := json.Marshal(unifiedReq)
+		jsonData, err := common.Marshal(unifiedReq)
 		if err != nil {
 			c.Next()
 			return
 		}
 
 		// Rewrite request body and path
-		c.Request.Body = io.NopCloser(bytes.NewBuffer(jsonData))
+		if err := common.ReplaceRequestBody(c, jsonData); err != nil {
+			c.Next()
+			return
+		}
 		c.Request.URL.Path = "/v1/video/generations"
 		if image, ok := originalReq["image"]; !ok || image == "" {
 			c.Set("action", constant.TaskActionTextGenerate)
 		}
 
-		// We have to reset the request body for the next handlers
-		c.Set(common.KeyRequestBody, jsonData)
 		c.Next()
 	}
 }
