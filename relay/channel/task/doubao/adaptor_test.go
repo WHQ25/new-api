@@ -3,6 +3,7 @@ package doubao
 import (
 	"testing"
 
+	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
@@ -238,9 +239,33 @@ func TestConvertToRequestPayloadCarriesFullArkFieldSet(t *testing.T) {
 	payload, err := a.convertToRequestPayload(&req, false)
 	require.NoError(t, err)
 
-	assert.Equal(t, "i2v", payload.OmniReferenceTaskType)
-	assert.Equal(t, "mp4", payload.OutputFormat)
+	assert.Equal(t, lo.ToPtr("i2v"), payload.OmniReferenceTaskType)
+	assert.Equal(t, lo.ToPtr("mp4"), payload.OutputFormat)
 	assert.Equal(t, ptrIntValue(121), payload.Frames)
 	assert.Equal(t, "user-1", payload.SafetyIdentifier)
 	assert.Equal(t, "default", payload.ServiceTier)
+}
+
+// 可选标量必须保留 presence：显式空串是调用方的选择，要原样下发给上游，
+// 不能和「未提交」折叠成同一种结果。
+func TestConvertToRequestPayloadPreservesExplicitEmptyOptionalStrings(t *testing.T) {
+	t.Parallel()
+
+	a := &TaskAdaptor{}
+
+	absent, err := a.convertToRequestPayload(&relaycommon.TaskSubmitReq{Prompt: "p"}, false)
+	require.NoError(t, err)
+	assert.Nil(t, absent.OutputFormat)
+
+	explicit, err := a.convertToRequestPayload(&relaycommon.TaskSubmitReq{
+		Prompt:   "p",
+		Metadata: map[string]any{"output_format": ""},
+	}, false)
+	require.NoError(t, err)
+	require.NotNil(t, explicit.OutputFormat)
+	assert.Equal(t, "", *explicit.OutputFormat)
+
+	body, err := common.Marshal(explicit)
+	require.NoError(t, err)
+	assert.Contains(t, string(body), `"output_format":""`)
 }

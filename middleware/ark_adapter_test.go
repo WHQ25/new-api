@@ -151,6 +151,19 @@ func TestArkRequestConvertRejectsOutOfContractNumbers(t *testing.T) {
 		{"frames above range", `{"model":"m","content":[{"type":"text","text":"p"}],"frames":293}`},
 		{"frames off the 25+4n grid", `{"model":"m","content":[{"type":"text","text":"p"}],"frames":30}`},
 		{"fractional frames", `{"model":"m","content":[{"type":"text","text":"p"}],"frames":29.5}`},
+		{"seed below range", `{"model":"m","content":[{"type":"text","text":"p"}],"seed":-2}`},
+		{"execution_expires_after below range", `{"model":"m","content":[{"type":"text","text":"p"}],"execution_expires_after":3599}`},
+		{"execution_expires_after above range", `{"model":"m","content":[{"type":"text","text":"p"}],"execution_expires_after":259201}`},
+		{"priority above range", `{"model":"m","content":[{"type":"text","text":"p"}],"priority":10}`},
+		// 这些类型错误放行后要到构建上游请求体时才失败，那时预扣费已经发生，
+		// 并且会被当成 5xx 触发跨渠道重试、把客户端错误记到渠道账上。
+		{"numeric output_format", `{"model":"m","content":[{"type":"text","text":"p"}],"output_format":123}`},
+		{"numeric omni_reference_task_type", `{"model":"m","content":[{"type":"text","text":"p"}],"omni_reference_task_type":123}`},
+		{"numeric model", `{"model":123,"content":[{"type":"text","text":"p"}]}`},
+		{"string boolean", `{"model":"m","content":[{"type":"text","text":"p"}],"watermark":"false"}`},
+		{"missing content", `{"model":"m"}`},
+		{"empty content", `{"model":"m","content":[]}`},
+		{"content is not an array", `{"model":"m","content":{"type":"text"}}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -171,6 +184,12 @@ func TestArkRequestConvertAcceptsContractBoundaries(t *testing.T) {
 		`{"model":"m","content":[{"type":"text","text":"p"}],"duration":3600}`,
 		`{"model":"m","content":[{"type":"text","text":"p"}],"frames":29}`,
 		`{"model":"m","content":[{"type":"text","text":"p"}],"frames":289}`,
+		`{"model":"m","content":[{"type":"text","text":"p"}],"seed":-1}`,
+		`{"model":"m","content":[{"type":"text","text":"p"}],"seed":2147483647}`,
+		`{"model":"m","content":[{"type":"text","text":"p"}],"execution_expires_after":3600}`,
+		`{"model":"m","content":[{"type":"text","text":"p"}],"priority":0}`,
+		// 显式 null 等同于未提交，不应被当成类型错误。
+		`{"model":"m","content":[{"type":"text","text":"p"}],"output_format":null,"seed":null}`,
 	} {
 		_, _, recorder := arkSubmit(t, body, okHandler)
 		assert.Equal(t, http.StatusOK, recorder.Code, "body %s must be accepted", body)
@@ -291,6 +310,43 @@ func TestArkFetchContentIsWhitelisted(t *testing.T) {
 		"last_frame_url": "https://cdn/l.jpg",
 	}, response["content"])
 	assert.NotContains(t, recorder.Body.String(), "cgt-leak")
+}
+
+// 顶层键白名单挡不住嵌套值：usage / tools 是对象和数组，整体复制会把上游后续在
+// 里面新增的任何字段（包括嵌套形式的上游任务 ID）一并转发出去。官方文档对
+// 「不返回嵌套形式的上游任务 ID」是硬约束，因此逐字段按文档类型投影。
+func TestArkFetchProjectsNestedUpstreamMetadata(t *testing.T) {
+	internal := `{"code":"success","data":{"task_id":"task_abc","status":"SUCCESS","data":{
+		"id":"cgt-top-secret",
+		"status":"succeeded",
+		"resolution":"720p",
+		"duration":8,
+		"usage":{"completion_tokens":100,"total_tokens":120,"upstream_task_id":"cgt-nested-secret"},
+		"tools":[{"type":"web_search","task_id":"cgt-tool-secret"}]
+	}}}`
+	_, response, recorder := arkFetch(t, "task_abc", internal)
+
+	assert.Equal(t, map[string]any{"completion_tokens": float64(100), "total_tokens": float64(120)}, response["usage"])
+	assert.Equal(t, []any{map[string]any{"type": "web_search"}}, response["tools"])
+	assert.NotContains(t, recorder.Body.String(), "cgt-")
+}
+
+// 标量字段也要收窄类型：上游把 resolution 写成对象时整体复制同样会带出未知字段。
+func TestArkFetchDropsTypeMismatchedUpstreamFields(t *testing.T) {
+	internal := `{"code":"success","data":{"task_id":"task_abc","status":"SUCCESS","data":{
+		"status":"succeeded",
+		"resolution":{"value":"720p","upstream_task_id":"cgt-scalar-secret"},
+		"duration":"8",
+		"usage":"cgt-usage-secret",
+		"tools":"cgt-tools-secret"
+	}}}`
+	_, response, recorder := arkFetch(t, "task_abc", internal)
+
+	assert.NotContains(t, response, "resolution")
+	assert.NotContains(t, response, "duration")
+	assert.NotContains(t, response, "usage")
+	assert.NotContains(t, response, "tools")
+	assert.NotContains(t, recorder.Body.String(), "cgt-")
 }
 
 // 官方协议约定 error 仅在失败时出现；cancelled / expired 是「没跑完」而非「跑失败」。

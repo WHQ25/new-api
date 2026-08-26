@@ -118,30 +118,61 @@ func rewriteArkRequest(c *gin.Context) bool {
 	return true
 }
 
-// 方舟官方协议的帧数取值域：frames ∈ [29, 289] 且 frames = 25 + 4n。
+// 方舟官方协议的数值取值域。frames 另有 frames = 25 + 4n 的网格约束。
 const (
 	arkFramesBase = 25
 	arkFramesStep = 4
-	arkMinFrames  = 29
-	arkMaxFrames  = 289
 )
 
-// arkRequestBoundsError 在协议边界上拒绝越界的数值，返回空串表示通过。
-// duration 与 frames 都会成为输出时长、进而成为计费乘数，必须在这里以 400 拦下，
-// 而不是留给下游钳制或让上游决定。非整数同样拒绝：内部 dto.IntValue 只接受整数
-// 和可解析的数字字符串，浮点值会一路走到构建上游请求体时才失败成 500。
+// arkIntRanges 是官方文档给出的整数字段取值域。duration 与 frames 决定输出时长、
+// 进而成为计费乘数，必须在这里以 400 拦下，不能留给下游钳制或让上游决定。
+var arkIntRanges = map[string][2]int{
+	"duration":                {-1, relaycommon.MaxTaskDurationSeconds},
+	"frames":                  {29, 289},
+	"seed":                    {-1, math.MaxInt32},
+	"execution_expires_after": {3600, 259200},
+	"priority":                {0, 9},
+}
+
+var (
+	arkStringFields = []string{"model", "omni_reference_task_type", "resolution", "ratio", "output_format", "safety_identifier", "service_tier", "callback_url"}
+	arkBoolFields   = []string{"generate_audio", "watermark", "camera_fixed", "return_last_frame", "draft"}
+)
+
+// arkRequestBoundsError 在协议边界上按官方文档校验字段类型与取值域，返回空串表示通过。
+// 放行错误类型的代价不只是「上游拒绝」：metadata 要到构建上游请求体时才反序列化，
+// 那时预扣费已经发生，失败会表现成 500 build_request_failed，进而触发跨渠道重试并把
+// 客户端的格式错误记到渠道账上。
 func arkRequestBoundsError(req map[string]any) string {
-	if raw, ok := req["duration"]; ok && raw != nil {
-		seconds, ok := arkInt(raw)
-		if !ok || seconds < -1 || seconds > relaycommon.MaxTaskDurationSeconds {
-			return fmt.Sprintf("duration must be an integer between -1 and %d", relaycommon.MaxTaskDurationSeconds)
+	if content, ok := req["content"].([]any); !ok || len(content) == 0 {
+		return "content must be a non-empty array"
+	}
+	for _, field := range arkStringFields {
+		if raw, ok := req[field]; ok && raw != nil {
+			if _, ok := raw.(string); !ok {
+				return field + " must be a string"
+			}
 		}
 	}
-	if raw, ok := req["frames"]; ok && raw != nil {
-		frames, ok := arkInt(raw)
-		if !ok || frames < arkMinFrames || frames > arkMaxFrames || (frames-arkFramesBase)%arkFramesStep != 0 {
-			return fmt.Sprintf("frames must be an integer between %d and %d satisfying frames = %d + %dn",
-				arkMinFrames, arkMaxFrames, arkFramesBase, arkFramesStep)
+	for _, field := range arkBoolFields {
+		if raw, ok := req[field]; ok && raw != nil {
+			if _, ok := raw.(bool); !ok {
+				return field + " must be a boolean"
+			}
+		}
+	}
+	for _, field := range []string{"duration", "frames", "seed", "execution_expires_after", "priority"} {
+		raw, present := req[field]
+		if !present || raw == nil {
+			continue
+		}
+		bounds := arkIntRanges[field]
+		value, ok := arkInt(raw)
+		if !ok || value < bounds[0] || value > bounds[1] {
+			return fmt.Sprintf("%s must be an integer between %d and %d", field, bounds[0], bounds[1])
+		}
+		if field == "frames" && (value-arkFramesBase)%arkFramesStep != 0 {
+			return fmt.Sprintf("frames must satisfy frames = %d + %dn", arkFramesBase, arkFramesStep)
 		}
 	}
 	return ""
@@ -304,11 +335,24 @@ func convertArkFetchResponse(body []byte) ([]byte, bool) {
 	if modelName := arkOriginModelName(task.Properties); modelName != "" {
 		out["model"] = modelName
 	}
-	// 上游元数据按白名单复制，避免把 cgt-xxx 之类的上游任务 ID 泄露给调用方。
-	for _, key := range []string{"resolution", "ratio", "duration", "framespersecond", "seed", "service_tier", "tools", "usage"} {
-		if value, ok := upstream[key]; ok && value != nil {
+	// 上游元数据逐字段按官方文档的类型投影，而不是按顶层键复制值：整体复制 usage /
+	// tools 这类嵌套结构，会把上游后续在里面新增的任何字段（包括嵌套形式的上游任务 ID）
+	// 一并转发出去，保密性就不是 fail-closed 的。
+	for _, key := range []string{"resolution", "ratio", "service_tier"} {
+		if value, ok := upstream[key].(string); ok && value != "" {
 			out[key] = value
 		}
+	}
+	for _, key := range []string{"duration", "framespersecond", "seed"} {
+		if value, ok := upstream[key].(float64); ok {
+			out[key] = value
+		}
+	}
+	if usage := arkTaskUsage(upstream); len(usage) > 0 {
+		out["usage"] = usage
+	}
+	if tools := arkTaskTools(upstream); len(tools) > 0 {
+		out["tools"] = tools
 	}
 	if content := arkTaskContent(upstream, task.ResultURL); len(content) > 0 {
 		out["content"] = content
@@ -383,6 +427,40 @@ func arkTaskContent(upstream map[string]any, resultURL string) map[string]any {
 		content["video_url"] = resultURL
 	}
 	return content
+}
+
+// arkTaskUsage 只投影官方文档定义的两个用量字段。
+func arkTaskUsage(upstream map[string]any) map[string]any {
+	upstreamUsage, ok := upstream["usage"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	usage := map[string]any{}
+	for _, key := range []string{"completion_tokens", "total_tokens"} {
+		if value, ok := upstreamUsage[key].(float64); ok {
+			usage[key] = value
+		}
+	}
+	return usage
+}
+
+// arkTaskTools 只投影官方文档定义的 type 字段。
+func arkTaskTools(upstream map[string]any) []map[string]any {
+	items, ok := upstream["tools"].([]any)
+	if !ok {
+		return nil
+	}
+	tools := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if toolType, ok := itemMap["type"].(string); ok && toolType != "" {
+			tools = append(tools, map[string]any{"type": toolType})
+		}
+	}
+	return tools
 }
 
 func arkTaskError(upstream map[string]any, failReason string, failed bool) map[string]any {

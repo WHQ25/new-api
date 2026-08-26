@@ -56,8 +56,10 @@ type requestPayload struct {
 	Priority         *dto.IntValue `json:"priority,omitempty"`
 	// OmniReferenceTaskType 与 OutputFormat 是方舟官方请求体的字段。它们只能经
 	// metadata 到达这里，缺了就会被静默丢弃，官方协议入站的调用方无从察觉。
-	OmniReferenceTaskType string         `json:"omni_reference_task_type,omitempty"`
-	OutputFormat          string         `json:"output_format,omitempty"`
+	// 用指针保留 presence：非指针 string + omitempty 会把「未提交」和「显式空串」
+	// 折叠成同一种下发结果。
+	OmniReferenceTaskType *string        `json:"omni_reference_task_type,omitempty"`
+	OutputFormat          *string        `json:"output_format,omitempty"`
 	Resolution            string         `json:"resolution,omitempty"`
 	Ratio                 string         `json:"ratio,omitempty"`
 	Duration              *dto.IntValue  `json:"duration,omitempty"`
