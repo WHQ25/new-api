@@ -12,8 +12,6 @@ func GetEndpointTypesByChannelType(channelType int, modelName string) []constant
 	//	endpointTypes = []constant.EndpointType{constant.EndpointTypeMidjourney}
 	//case constant.ChannelTypeSunoAPI:
 	//	endpointTypes = []constant.EndpointType{constant.EndpointTypeSuno}
-	//case constant.ChannelTypeKling:
-	//	endpointTypes = []constant.EndpointType{constant.EndpointTypeKling}
 	//case constant.ChannelTypeJimeng:
 	//	endpointTypes = []constant.EndpointType{constant.EndpointTypeJimeng}
 	case constant.ChannelTypeAws:
@@ -28,7 +26,11 @@ func GetEndpointTypesByChannelType(channelType int, modelName string) []constant
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI}
 	case constant.ChannelTypeXai:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAI, constant.EndpointTypeOpenAIResponse}
-	case constant.ChannelTypeSora:
+	// 纯视频任务渠道：没有同步聊天适配器，走的是 /v1/video/generations 那条任务链路。
+	// 漏掉它们会落到下面的 default 分支报成 openai，模型广场就把视频模型标成 Chat，
+	// 调用方照着去打 /v1/chat/completions 只会拿到 404。
+	// Jimeng 不在此列：它另有一个同步图像适配器。
+	case constant.ChannelTypeSora, constant.ChannelTypeKling, constant.ChannelTypeVidu, constant.ChannelTypeDoubaoVideo:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
 	case constant.ChannelTypeSub2API, constant.ChannelTypeNewAPI:
 		endpointTypes = []constant.EndpointType{
