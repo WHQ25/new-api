@@ -355,36 +355,72 @@ func (w *arkResponseWriter) flush(method string) {
 	}
 }
 
-// arkRedactedTaskID 替换掉自由文本里出现的上游任务 ID。
-const arkRedactedTaskID = "[redacted]"
-
-// redactArkUpstreamError 归一化那些回显了上游原始响应体的提交错误。
-// relay 层在上游返回非 200 时会把整段响应体塞进 TaskError.Message，那是第三方的
-// 自由文本，我们无法推断里面有什么——官方文档要求创建失败时不向调用方暴露任何内部
-// 任务 ID，只有 fail-closed 才能保证。原文通过 SysError 留在服务端日志里，调用方
-// 拿到的 X-Oneapi-Request-Id 足以关联回去。其它错误码都是本地产生的，原样透传。
-func redactArkUpstreamError(body []byte) []byte {
-	var taskError dto.TaskError
-	if err := common.Unmarshal(body, &taskError); err != nil || taskError.Code != "fail_to_fetch_task" {
-		return body
-	}
-	common.SysError(fmt.Sprintf("ark video: upstream rejected the submission: %s", taskError.Message))
-	taskError.Message = "upstream rejected the video generation request"
-	redacted, err := common.Marshal(taskError)
-	if err != nil {
-		return body
-	}
-	return redacted
+// arkSafeErrorCodes 是可以把原始 message 透传给调用方的错误码：它们全部由本网关
+// 本地产生，内容是调用方需要、且能据此修正请求的诊断信息。
+//
+// 采用 allowlist 而非 denylist 是刻意的。上游的响应体会在多处被字面回显进
+// TaskError.Message（上游非 200 的 fail_to_fetch_task、HTTP 200 但 JSON 非法的
+// unmarshal_response_body_failed 等），那是第三方自由文本，无法逐字段推断里面有什么。
+// 官方协议承诺不向调用方暴露任何内部任务 ID，只有「默认归一化、显式放行」才能保证
+// 后续新增的错误码不会重新打开泄露路径。
+var arkSafeErrorCodes = map[string]bool{
+	// 请求校验
+	"invalid_request":          true,
+	"invalid_seconds":          true,
+	"invalid_multipart_form":   true,
+	"invalid_api_platform":     true,
+	"read_request_body_failed": true,
+	// 定价与模型
+	"missing_resolution":      true,
+	"video_token_price_error": true,
+	"model_price_error":       true,
+	"model_mapping_failed":    true,
+	"model_not_found":         true,
+	// 额度
+	"insufficient_user_quota":        true,
+	"pre_consume_token_quota_failed": true,
+	// 任务查询
+	"task_not_exist":       true,
+	"invalid_relay_mode":   true,
+	"task_channel_disable": true,
 }
 
-// redactArkTaskID 从自由文本里抹掉上游任务 ID。上游任务 ID 是我们唯一能确定的内部
-// 标识，按精确串替换既能闭合「不回传上游 ID」的约定，又不会误伤失败原因本身——
-// 调用方仍然需要知道任务为什么失败。
-func redactArkTaskID(text, upstreamTaskID string) string {
-	if text == "" || upstreamTaskID == "" {
-		return text
+const arkGenericErrorMessage = "the upstream video provider rejected or failed this request"
+
+// redactArkUpstreamError 归一化所有可能夹带上游自由文本的错误响应。
+// 原文通过 SysError 留在服务端日志，调用方拿到的 X-Oneapi-Request-Id 足以关联回去。
+func redactArkUpstreamError(body []byte) []byte {
+	var raw map[string]any
+	if err := common.Unmarshal(body, &raw); err != nil {
+		return arkSafeErrorBody("")
 	}
-	return strings.ReplaceAll(text, upstreamTaskID, arkRedactedTaskID)
+	// abortWithOpenAiMessage 写的是 {"error": {...}} 形状，全部由鉴权、分发和本中间件
+	// 本地产生，不含上游响应体。
+	if _, ok := raw["error"]; ok {
+		return body
+	}
+	code, _ := raw["code"].(string)
+	if arkSafeErrorCodes[code] {
+		return body
+	}
+	if message, _ := raw["message"].(string); message != "" {
+		common.SysError(fmt.Sprintf("ark video: redacted error response, code=%s message=%s", code, message))
+	}
+	return arkSafeErrorBody(code)
+}
+
+// arkSafeErrorBody 构造不含任何上游文本的错误响应。marshal 失败时回退到预置的字面量，
+// 而不是回退原始 body——那样就不是 fail-closed 了。
+func arkSafeErrorBody(code string) []byte {
+	if code == "" {
+		code = "upstream_error"
+	}
+	// Data 一并清空：relay 层将来若把上游原始结构放进 data，就会重新打开嵌套泄露路径。
+	safe, err := common.Marshal(dto.TaskError{Code: code, Message: arkGenericErrorMessage})
+	if err != nil {
+		return []byte(`{"code":"upstream_error","message":"` + arkGenericErrorMessage + `","data":null}`)
+	}
+	return safe
 }
 
 func convertArkResponse(method string, body []byte) ([]byte, bool) {
@@ -570,31 +606,22 @@ func arkTaskTools(upstream map[string]any) []map[string]any {
 	return tools
 }
 
+// arkTaskError 返回失败任务的错误对象。
+//
+// 这里刻意不回传上游的 code/message。上游任务 ID 可以出现在这两段自由文本的任意位置，
+// 而按 task.Data 顶层 id 做精确替换并不可靠——ParseTaskResult 不要求上游响应带 id，
+// 一份只有 status 和 error 的响应同样会被记成 FAILURE，那时就没有可替换的串了。
+// 官方协议把「不暴露内部任务 ID」列为硬约束，这里只能 fail-closed。
+// 具体失败原因仍然完整保存在任务记录的 fail_reason 与服务端日志里，管理员可查。
 func arkTaskError(upstream map[string]any, failReason string, failed bool) map[string]any {
-	code, message := "", ""
-	if upstreamError, ok := upstream["error"].(map[string]any); ok {
-		code, _ = upstreamError["code"].(string)
-		message, _ = upstreamError["message"].(string)
-	}
-	if code == "" && message == "" && !failed {
+	upstreamError, hasUpstreamError := upstream["error"].(map[string]any)
+	if !failed && !hasUpstreamError {
 		return nil
 	}
-	if code == "" {
-		code = "task_failed"
+	if hasUpstreamError || failReason != "" {
+		common.SysError(fmt.Sprintf("ark video: redacted task failure, upstream_error=%v fail_reason=%s", upstreamError, failReason))
 	}
-	if message == "" {
-		message = failReason
-	}
-	if message == "" {
-		message = "video generation failed"
-	}
-	// 上游的 code / message 是自由文本，可能带上上游任务 ID；failReason 也是从同一段
-	// 文本落库的，同样要过一遍。
-	upstreamTaskID, _ := upstream["id"].(string)
-	return map[string]any{
-		"code":    redactArkTaskID(code, upstreamTaskID),
-		"message": redactArkTaskID(message, upstreamTaskID),
-	}
+	return map[string]any{"code": "task_failed", "message": "video generation failed"}
 }
 
 // arkOriginModelName 取任务记录里的对外模型名。TaskDto.Properties 是 any，

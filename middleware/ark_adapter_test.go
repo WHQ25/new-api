@@ -422,21 +422,11 @@ func TestArkFetchMapsTaskStatuses(t *testing.T) {
 }
 
 func TestArkFetchReportsFailureError(t *testing.T) {
-	internal := `{"code":"success","data":{
-		"task_id":"task_abc","status":"FAILURE","fail_reason":"local reason",
-		"data":{"status":"failed","error":{"code":"task_failed","message":"video generation failed"}}
-	}}`
+	internal := `{"code":"success","data":{"task_id":"task_abc","status":"FAILURE","fail_reason":"local reason","data":{}}}`
 	_, response, _ := arkFetch(t, "task_abc", internal)
 
 	assert.Equal(t, "failed", response["status"])
 	assert.Equal(t, map[string]any{"code": "task_failed", "message": "video generation failed"}, response["error"])
-}
-
-func TestArkFetchUsesFailReasonWhenUpstreamErrorMissing(t *testing.T) {
-	internal := `{"code":"success","data":{"task_id":"task_abc","status":"FAILURE","fail_reason":"upstream timeout","data":{}}}`
-	_, response, _ := arkFetch(t, "task_abc", internal)
-
-	assert.Equal(t, map[string]any{"code": "task_failed", "message": "upstream timeout"}, response["error"])
 }
 
 func TestArkFetchRequiresTaskID(t *testing.T) {
@@ -471,46 +461,78 @@ func TestArkResponseDoesNotCommitOnPanic(t *testing.T) {
 	assert.NotContains(t, recorder.Body.String(), "task_abc")
 }
 
-// 结构投影挡不住自由文本。上游任务 ID 是我们唯一能确定的内部标识，按精确串从
-// error.code / error.message 里抹掉，既闭合约定又保留失败原因。
-func TestArkFetchRedactsUpstreamTaskIDFromErrorText(t *testing.T) {
-	internal := `{"code":"success","data":{"task_id":"task_abc","status":"FAILURE","fail_reason":"upstream task cgt-secret failed","data":{
-		"id":"cgt-secret",
-		"status":"failed",
-		"error":{"code":"task_failed","message":"upstream task cgt-secret failed"}
-	}}}`
-	_, response, recorder := arkFetch(t, "task_abc", internal)
+// 结构投影挡不住自由文本，而按 task.Data 顶层 id 做精确替换也不可靠：
+// ParseTaskResult 不要求上游响应带 id，只有 status 和 error 的响应同样会被记成
+// FAILURE，那时没有可替换的串。官方协议把「不暴露内部任务 ID」列为硬约束，只能
+// fail-closed 用固定文案。
+func TestArkFetchNeverReturnsUpstreamFailureText(t *testing.T) {
+	cases := []struct {
+		name string
+		data string
+	}{
+		{
+			name: "upstream error carries the task id",
+			data: `{"id":"cgt-secret","status":"failed","error":{"code":"task_failed","message":"upstream task cgt-secret failed"}}`,
+		},
+		{
+			// 没有顶层 id，精确串替换在这里无从下手。
+			name: "upstream response has no top level id",
+			data: `{"status":"failed","error":{"code":"cgt-secret","message":"upstream task cgt-secret failed"}}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			internal := `{"code":"success","data":{"task_id":"task_abc","status":"FAILURE","fail_reason":"upstream task cgt-secret failed","data":` + tc.data + `}}`
+			_, response, recorder := arkFetch(t, "task_abc", internal)
 
-	taskError := response["error"].(map[string]any)
-	assert.Equal(t, "upstream task [redacted] failed", taskError["message"])
-	assert.NotContains(t, recorder.Body.String(), "cgt-secret")
-}
-
-func TestArkFetchRedactsUpstreamTaskIDFromFailReasonFallback(t *testing.T) {
-	internal := `{"code":"success","data":{"task_id":"task_abc","status":"FAILURE","fail_reason":"task cgt-secret rejected","data":{"id":"cgt-secret","status":"failed"}}}`
-	_, response, recorder := arkFetch(t, "task_abc", internal)
-
-	assert.Equal(t, "task [redacted] rejected", response["error"].(map[string]any)["message"])
-	assert.NotContains(t, recorder.Body.String(), "cgt-secret")
-}
-
-// 上游非 200 时 relay 层会把整段上游响应体回显进 TaskError.Message。那是第三方的
-// 自由文本，无法逐字段推断，只能整体归一化。
-func TestArkSubmitNormalizesUpstreamErrorBody(t *testing.T) {
-	_, _, recorder := arkSubmit(t, `{"model":"m","content":[{"type":"text","text":"p"}]}`, func(c *gin.Context) {
-		c.JSON(http.StatusBadRequest, dto.TaskError{
-			Code:    "fail_to_fetch_task",
-			Message: `{"id":"cgt-partial","message":"task cgt-partial rejected"}`,
+			assert.Equal(t, "failed", response["status"])
+			assert.Equal(t, map[string]any{"code": "task_failed", "message": "video generation failed"}, response["error"])
+			assert.NotContains(t, recorder.Body.String(), "cgt-secret")
 		})
+	}
+}
+
+// 上游非 200、以及 HTTP 200 但 JSON 非法，都会把上游原始 body 字面回显进
+// TaskError.Message。放行的错误码用 allowlist 而不是 denylist：后续新增的错误码
+// 默认被归一化，不会重新打开泄露路径。
+func TestArkSubmitNormalizesEveryUpstreamDerivedError(t *testing.T) {
+	cases := []struct {
+		name    string
+		code    string
+		status  int
+		message string
+	}{
+		{"upstream non-200", "fail_to_fetch_task", http.StatusBadRequest, `{"id":"cgt-partial","message":"task cgt-partial rejected"}`},
+		{"upstream 200 with truncated json", "unmarshal_response_body_failed", http.StatusInternalServerError, `body: {"id":"cgt-partial"`},
+		{"network failure", "do_request_failed", http.StatusInternalServerError, `post http://upstream/api/v3: cgt-partial`},
+		{"unknown future code", "some_new_code", http.StatusInternalServerError, `cgt-partial`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, recorder := arkSubmit(t, `{"model":"m","content":[{"type":"text","text":"p"}]}`, func(c *gin.Context) {
+				c.JSON(tc.status, dto.TaskError{Code: tc.code, Message: tc.message})
+			})
+
+			require.Equal(t, tc.status, recorder.Code)
+			assert.NotContains(t, recorder.Body.String(), "cgt-partial")
+
+			var taskError dto.TaskError
+			require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &taskError))
+			assert.Equal(t, tc.code, taskError.Code)
+			assert.Equal(t, arkGenericErrorMessage, taskError.Message)
+			assert.Nil(t, taskError.Data)
+		})
+	}
+}
+
+// 鉴权、分发和本中间件用的是 {"error": {...}} 形状，全部本地产生，必须原样透传。
+func TestArkSubmitKeepsOpenAIShapedLocalErrors(t *testing.T) {
+	_, _, recorder := arkSubmit(t, `{"model":"m","content":[{"type":"text","text":"p"}]}`, func(c *gin.Context) {
+		abortWithOpenAiMessage(c, http.StatusUnauthorized, "Invalid token")
 	})
 
-	require.Equal(t, http.StatusBadRequest, recorder.Code)
-	assert.NotContains(t, recorder.Body.String(), "cgt-partial")
-
-	var taskError dto.TaskError
-	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &taskError))
-	assert.Equal(t, "fail_to_fetch_task", taskError.Code)
-	assert.Equal(t, "upstream rejected the video generation request", taskError.Message)
+	require.Equal(t, http.StatusUnauthorized, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "Invalid token")
 }
 
 // 本地产生的错误正是调用方需要的诊断信息，必须原样透传。
