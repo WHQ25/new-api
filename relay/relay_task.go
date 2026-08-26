@@ -231,10 +231,7 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	// 8. 构建请求体
 	requestBody, err := adaptor.BuildRequestBody(c, info)
 	if err != nil {
-		// 构建上游请求体失败几乎总是客户端把字段写成了错误类型（metadata 直到这一步
-		// 才反序列化进上游 DTO），渠道没有责任。标成 local 才不会触发跨渠道重试、
-		// 把错误记到渠道账上，甚至按 5xx 关键字自动禁用渠道。
-		return nil, service.TaskErrorWrapperLocal(err, "build_request_failed", http.StatusBadRequest)
+		return nil, service.TaskErrorWrapper(err, "build_request_failed", http.StatusInternalServerError)
 	}
 
 	// 9. 发送请求

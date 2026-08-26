@@ -164,6 +164,17 @@ func TestArkRequestConvertRejectsOutOfContractNumbers(t *testing.T) {
 		{"missing content", `{"model":"m"}`},
 		{"empty content", `{"model":"m","content":[]}`},
 		{"content is not an array", `{"model":"m","content":{"type":"text"}}`},
+		// content 条目的形状错误若放行，要到预扣费之后反序列化上游请求体时才暴露。
+		{"content item is not an object", `{"model":"m","content":["p"]}`},
+		{"missing item type", `{"model":"m","content":[{"text":"p"}]}`},
+		{"unsupported item type", `{"model":"m","content":[{"type":"file_url","file_url":{"url":"u"}}]}`},
+		{"text item without text", `{"model":"m","content":[{"type":"text","text":123}]}`},
+		{"media url is not an object", `{"model":"m","content":[{"type":"text","text":"p"},{"type":"image_url","image_url":"not-an-object"}]}`},
+		{"media url without url string", `{"model":"m","content":[{"type":"video_url","video_url":{"url":123}}]}`},
+		{"media item missing its url field", `{"model":"m","content":[{"type":"audio_url"}]}`},
+		{"non-string role", `{"model":"m","content":[{"type":"image_url","image_url":{"url":"u"},"role":1}]}`},
+		// 与条目 type 不匹配的 URL 字段照样参与上游 DTO 反序列化，也必须拦下。
+		{"broken url field on a text item", `{"model":"m","content":[{"type":"text","text":"p","image_url":"broken"}]}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -190,6 +201,9 @@ func TestArkRequestConvertAcceptsContractBoundaries(t *testing.T) {
 		`{"model":"m","content":[{"type":"text","text":"p"}],"priority":0}`,
 		// 显式 null 等同于未提交，不应被当成类型错误。
 		`{"model":"m","content":[{"type":"text","text":"p"}],"output_format":null,"seed":null}`,
+		// role 的取值由所选模型决定，这里只要求是字符串，不限制枚举。
+		`{"model":"m","content":[{"type":"image_url","image_url":{"url":"u"},"role":"whatever_new_role"},{"type":"text","text":"p"}]}`,
+		`{"model":"m","content":[{"type":"video_url","video_url":{"url":"u"}},{"type":"audio_url","audio_url":{"url":"u"}},{"type":"text","text":"p"}]}`,
 	} {
 		_, _, recorder := arkSubmit(t, body, okHandler)
 		assert.Equal(t, http.StatusOK, recorder.Code, "body %s must be accepted", body)

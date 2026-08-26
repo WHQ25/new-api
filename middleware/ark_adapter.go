@@ -17,6 +17,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -144,8 +145,12 @@ var (
 // 那时预扣费已经发生，失败会表现成 500 build_request_failed，进而触发跨渠道重试并把
 // 客户端的格式错误记到渠道账上。
 func arkRequestBoundsError(req map[string]any) string {
-	if content, ok := req["content"].([]any); !ok || len(content) == 0 {
+	content, ok := req["content"].([]any)
+	if !ok || len(content) == 0 {
 		return "content must be a non-empty array"
+	}
+	if message := arkContentError(content); message != "" {
+		return message
 	}
 	for _, field := range arkStringFields {
 		if raw, ok := req[field]; ok && raw != nil {
@@ -173,6 +178,54 @@ func arkRequestBoundsError(req map[string]any) string {
 		}
 		if field == "frames" && (value-arkFramesBase)%arkFramesStep != 0 {
 			return fmt.Sprintf("frames must satisfy frames = %d + %dn", arkFramesBase, arkFramesStep)
+		}
+	}
+	return ""
+}
+
+// arkMediaContentTypes 是方舟官方 content 支持的媒体条目类型，每类的 type 名同时
+// 就是它必需的 URL 字段名。官方文档给出的是固定四类（另加 text）；「由所选模型决定」
+// 说的是 media 项的 role 取值，不是 content 的 JSON 形状。上游 DTO 也只承载这四类，
+// 放行未知 type 不会带来前向兼容，只会让该条目的载荷在 typed round-trip 中被静默丢掉。
+var arkMediaContentTypes = []string{"image_url", "video_url", "audio_url"}
+
+// arkContentError 校验 content 每一项的形状。形状错误若放行，要到预扣费之后
+// 反序列化上游请求体时才暴露，那时既已扣费、又会被当成上游故障重试其它渠道。
+func arkContentError(content []any) string {
+	for index, raw := range content {
+		item, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Sprintf("content[%d] must be an object", index)
+		}
+		itemType, ok := item["type"].(string)
+		if !ok {
+			return fmt.Sprintf("content[%d].type must be a string", index)
+		}
+		if role, present := item["role"]; present && role != nil {
+			if _, ok := role.(string); !ok {
+				return fmt.Sprintf("content[%d].role must be a string", index)
+			}
+		}
+		if itemType == "text" {
+			if _, ok := item["text"].(string); !ok {
+				return fmt.Sprintf("content[%d].text must be a string", index)
+			}
+		} else if !slices.Contains(arkMediaContentTypes, itemType) {
+			return fmt.Sprintf("content[%d].type must be one of text, %s", index, strings.Join(arkMediaContentTypes, ", "))
+		}
+		// 逐个检查出现过的 URL 字段，包括与条目 type 不匹配的那些：它们照样会参与
+		// 上游 DTO 的反序列化，写坏了一样会在构建请求体时失败。
+		for _, field := range arkMediaContentTypes {
+			if _, present := item[field]; !present && field != itemType {
+				continue
+			}
+			media, ok := item[field].(map[string]any)
+			if !ok {
+				return fmt.Sprintf("content[%d].%s must be an object", index, field)
+			}
+			if _, ok := media["url"].(string); !ok {
+				return fmt.Sprintf("content[%d].%s.url must be a string", index, field)
+			}
 		}
 	}
 	return ""
