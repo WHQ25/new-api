@@ -166,6 +166,21 @@ func arkRequestBoundsError(req map[string]any) string {
 			}
 		}
 	}
+	if raw, ok := req["tools"]; ok && raw != nil {
+		items, ok := raw.([]any)
+		if !ok {
+			return "tools must be an array"
+		}
+		for index, item := range items {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				return fmt.Sprintf("tools[%d] must be an object", index)
+			}
+			if _, ok := itemMap["type"].(string); !ok {
+				return fmt.Sprintf("tools[%d].type must be a string", index)
+			}
+		}
+	}
 	for _, field := range []string{"duration", "frames", "seed", "execution_expires_after", "priority"} {
 		raw, present := req[field]
 		if !present || raw == nil {
@@ -184,7 +199,8 @@ func arkRequestBoundsError(req map[string]any) string {
 }
 
 // arkMediaContentTypes 是方舟官方 content 支持的媒体条目类型，每类的 type 名同时
-// 就是它必需的 URL 字段名。官方文档给出的是固定四类（另加 text）；「由所选模型决定」
+// 就是它必需的 URL 字段名。官方文档给出的是这三类媒体加上 text，共四类；
+// 「由所选模型决定」
 // 说的是 media 项的 role 取值，不是 content 的 JSON 形状。上游 DTO 也只承载这四类，
 // 放行未知 type 不会带来前向兼容，只会让该条目的载荷在 typed round-trip 中被静默丢掉。
 var arkMediaContentTypes = []string{"image_url", "video_url", "audio_url"}
@@ -206,11 +222,14 @@ func arkContentError(content []any) string {
 				return fmt.Sprintf("content[%d].role must be a string", index)
 			}
 		}
-		if itemType == "text" {
+		// text 无论出现在哪种条目上都会参与上游 DTO 反序列化，所以只要出现就要检查；
+		// type 为 text 时再额外要求它必须存在。
+		if _, present := item["text"]; present || itemType == "text" {
 			if _, ok := item["text"].(string); !ok {
 				return fmt.Sprintf("content[%d].text must be a string", index)
 			}
-		} else if !slices.Contains(arkMediaContentTypes, itemType) {
+		}
+		if itemType != "text" && !slices.Contains(arkMediaContentTypes, itemType) {
 			return fmt.Sprintf("content[%d].type must be one of text, %s", index, strings.Join(arkMediaContentTypes, ", "))
 		}
 		// 逐个检查出现过的 URL 字段，包括与条目 type 不匹配的那些：它们照样会参与
@@ -311,11 +330,14 @@ func (w *arkResponseWriter) WriteHeaderNow() {}
 func (w *arkResponseWriter) Flush() {}
 
 // flush 把缓冲的响应转换成方舟形状后写入真实的 ResponseWriter。
-// 非 200 响应（校验失败、额度不足、上游错误）原样透传：它们是 relay 层统一的错误
-// 形状，截断反而会让上游诊断信息丢失。200 但转换不出方舟形状时则 fail-closed —
-// 内部形状里带着上游原始响应，直接回退会把上游任务 ID 漏给调用方。
+// 本地产生的非 200 响应（校验失败、额度不足、模型不可用）原样透传，它们正是调用方
+// 需要的诊断信息；只有回显了上游原始响应体的那一类会被归一化。200 但转换不出方舟
+// 形状时 fail-closed — 内部形状里带着上游原始响应，直接回退会泄露上游任务 ID。
 func (w *arkResponseWriter) flush(method string) {
 	status, body := w.Status(), w.body.Bytes()
+	if status != http.StatusOK {
+		body = redactArkUpstreamError(body)
+	}
 	if status == http.StatusOK {
 		converted, ok := convertArkResponse(method, body)
 		if !ok {
@@ -331,6 +353,38 @@ func (w *arkResponseWriter) flush(method string) {
 	if len(body) > 0 {
 		_, _ = w.ResponseWriter.Write(body)
 	}
+}
+
+// arkRedactedTaskID 替换掉自由文本里出现的上游任务 ID。
+const arkRedactedTaskID = "[redacted]"
+
+// redactArkUpstreamError 归一化那些回显了上游原始响应体的提交错误。
+// relay 层在上游返回非 200 时会把整段响应体塞进 TaskError.Message，那是第三方的
+// 自由文本，我们无法推断里面有什么——官方文档要求创建失败时不向调用方暴露任何内部
+// 任务 ID，只有 fail-closed 才能保证。原文通过 SysError 留在服务端日志里，调用方
+// 拿到的 X-Oneapi-Request-Id 足以关联回去。其它错误码都是本地产生的，原样透传。
+func redactArkUpstreamError(body []byte) []byte {
+	var taskError dto.TaskError
+	if err := common.Unmarshal(body, &taskError); err != nil || taskError.Code != "fail_to_fetch_task" {
+		return body
+	}
+	common.SysError(fmt.Sprintf("ark video: upstream rejected the submission: %s", taskError.Message))
+	taskError.Message = "upstream rejected the video generation request"
+	redacted, err := common.Marshal(taskError)
+	if err != nil {
+		return body
+	}
+	return redacted
+}
+
+// redactArkTaskID 从自由文本里抹掉上游任务 ID。上游任务 ID 是我们唯一能确定的内部
+// 标识，按精确串替换既能闭合「不回传上游 ID」的约定，又不会误伤失败原因本身——
+// 调用方仍然需要知道任务为什么失败。
+func redactArkTaskID(text, upstreamTaskID string) string {
+	if text == "" || upstreamTaskID == "" {
+		return text
+	}
+	return strings.ReplaceAll(text, upstreamTaskID, arkRedactedTaskID)
 }
 
 func convertArkResponse(method string, body []byte) ([]byte, bool) {
@@ -534,7 +588,13 @@ func arkTaskError(upstream map[string]any, failReason string, failed bool) map[s
 	if message == "" {
 		message = "video generation failed"
 	}
-	return map[string]any{"code": code, "message": message}
+	// 上游的 code / message 是自由文本，可能带上上游任务 ID；failReason 也是从同一段
+	// 文本落库的，同样要过一遍。
+	upstreamTaskID, _ := upstream["id"].(string)
+	return map[string]any{
+		"code":    redactArkTaskID(code, upstreamTaskID),
+		"message": redactArkTaskID(message, upstreamTaskID),
+	}
 }
 
 // arkOriginModelName 取任务记录里的对外模型名。TaskDto.Properties 是 any，

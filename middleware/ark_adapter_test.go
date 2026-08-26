@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/dto"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
@@ -175,6 +176,10 @@ func TestArkRequestConvertRejectsOutOfContractNumbers(t *testing.T) {
 		{"non-string role", `{"model":"m","content":[{"type":"image_url","image_url":{"url":"u"},"role":1}]}`},
 		// 与条目 type 不匹配的 URL 字段照样参与上游 DTO 反序列化，也必须拦下。
 		{"broken url field on a text item", `{"model":"m","content":[{"type":"text","text":"p","image_url":"broken"}]}`},
+		{"non-string text on a media item", `{"model":"m","content":[{"type":"image_url","image_url":{"url":"u"},"text":123}]}`},
+		{"tools is not an array", `{"model":"m","content":[{"type":"text","text":"p"}],"tools":"not-an-array"}`},
+		{"tools item is not an object", `{"model":"m","content":[{"type":"text","text":"p"}],"tools":["web_search"]}`},
+		{"non-string tool type", `{"model":"m","content":[{"type":"text","text":"p"}],"tools":[{"type":123}]}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -204,6 +209,7 @@ func TestArkRequestConvertAcceptsContractBoundaries(t *testing.T) {
 		// role 的取值由所选模型决定，这里只要求是字符串，不限制枚举。
 		`{"model":"m","content":[{"type":"image_url","image_url":{"url":"u"},"role":"whatever_new_role"},{"type":"text","text":"p"}]}`,
 		`{"model":"m","content":[{"type":"video_url","video_url":{"url":"u"}},{"type":"audio_url","audio_url":{"url":"u"}},{"type":"text","text":"p"}]}`,
+		`{"model":"m","content":[{"type":"text","text":"p"}],"tools":[{"type":"web_search"}]}`,
 	} {
 		_, _, recorder := arkSubmit(t, body, okHandler)
 		assert.Equal(t, http.StatusOK, recorder.Code, "body %s must be accepted", body)
@@ -463,4 +469,56 @@ func TestArkResponseDoesNotCommitOnPanic(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, recorder.Code)
 	assert.NotContains(t, recorder.Body.String(), "task_abc")
+}
+
+// 结构投影挡不住自由文本。上游任务 ID 是我们唯一能确定的内部标识，按精确串从
+// error.code / error.message 里抹掉，既闭合约定又保留失败原因。
+func TestArkFetchRedactsUpstreamTaskIDFromErrorText(t *testing.T) {
+	internal := `{"code":"success","data":{"task_id":"task_abc","status":"FAILURE","fail_reason":"upstream task cgt-secret failed","data":{
+		"id":"cgt-secret",
+		"status":"failed",
+		"error":{"code":"task_failed","message":"upstream task cgt-secret failed"}
+	}}}`
+	_, response, recorder := arkFetch(t, "task_abc", internal)
+
+	taskError := response["error"].(map[string]any)
+	assert.Equal(t, "upstream task [redacted] failed", taskError["message"])
+	assert.NotContains(t, recorder.Body.String(), "cgt-secret")
+}
+
+func TestArkFetchRedactsUpstreamTaskIDFromFailReasonFallback(t *testing.T) {
+	internal := `{"code":"success","data":{"task_id":"task_abc","status":"FAILURE","fail_reason":"task cgt-secret rejected","data":{"id":"cgt-secret","status":"failed"}}}`
+	_, response, recorder := arkFetch(t, "task_abc", internal)
+
+	assert.Equal(t, "task [redacted] rejected", response["error"].(map[string]any)["message"])
+	assert.NotContains(t, recorder.Body.String(), "cgt-secret")
+}
+
+// 上游非 200 时 relay 层会把整段上游响应体回显进 TaskError.Message。那是第三方的
+// 自由文本，无法逐字段推断，只能整体归一化。
+func TestArkSubmitNormalizesUpstreamErrorBody(t *testing.T) {
+	_, _, recorder := arkSubmit(t, `{"model":"m","content":[{"type":"text","text":"p"}]}`, func(c *gin.Context) {
+		c.JSON(http.StatusBadRequest, dto.TaskError{
+			Code:    "fail_to_fetch_task",
+			Message: `{"id":"cgt-partial","message":"task cgt-partial rejected"}`,
+		})
+	})
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.NotContains(t, recorder.Body.String(), "cgt-partial")
+
+	var taskError dto.TaskError
+	require.NoError(t, common.Unmarshal(recorder.Body.Bytes(), &taskError))
+	assert.Equal(t, "fail_to_fetch_task", taskError.Code)
+	assert.Equal(t, "upstream rejected the video generation request", taskError.Message)
+}
+
+// 本地产生的错误正是调用方需要的诊断信息，必须原样透传。
+func TestArkSubmitKeepsLocalErrorMessages(t *testing.T) {
+	_, _, recorder := arkSubmit(t, `{"model":"m","content":[{"type":"text","text":"p"}]}`, func(c *gin.Context) {
+		c.JSON(http.StatusBadRequest, dto.TaskError{Code: "missing_resolution", Message: "metadata.resolution is required"})
+	})
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	assert.Contains(t, recorder.Body.String(), "metadata.resolution is required")
 }
