@@ -19,13 +19,19 @@ func TestGetEndpointTypesByChannelType(t *testing.T) {
 		want        []constant.EndpointType
 	}{
 		{
-			name:        "doubao video is video only",
+			// 豆包视频同时接受统一视频端点和方舟官方协议入站，两者都要报出来，
+			// 否则模型广场不会告诉客户可以直接把火山官方 SDK 指过来。
+			name:        "doubao video reports both the unified and the ark surface",
 			channelType: constant.ChannelTypeDoubaoVideo,
 			modelName:   "doubao-seedance-2-5-260628",
-			want:        []constant.EndpointType{constant.EndpointTypeOpenAIVideo},
+			want: []constant.EndpointType{
+				constant.EndpointTypeOpenAIVideo,
+				constant.EndpointTypeArkVideo,
+			},
 		},
 		{
-			name:        "kling is video only",
+			// 方舟入站层只有 doubao 适配器能还原 metadata，别的视频渠道不能报 ark-video。
+			name:        "kling does not advertise the ark surface",
 			channelType: constant.ChannelTypeKling,
 			modelName:   "kling-v1",
 			want:        []constant.EndpointType{constant.EndpointTypeOpenAIVideo},

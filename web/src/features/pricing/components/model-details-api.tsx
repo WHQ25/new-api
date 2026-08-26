@@ -423,6 +423,97 @@ function buildImageSample(lang: Lang, ctx: SampleContext): string {
   ].join('\n')
 }
 
+// 视频端点是异步任务：提交拿 id，再轮询。两种入站协议的请求体不同——统一端点用
+// 顶层 prompt + metadata.resolution，方舟官方协议用 content 数组 + 顶层 resolution。
+// 不区分就会退化成聊天示例，客户照着打必然报错。
+function buildVideoSample(lang: Lang, ctx: SampleContext): string {
+  const url = `${ctx.baseUrl}${ctx.endpointPath}`
+  const prompt = 'A white gull skimming the sea at dawn, cinematic camera.'
+  const isArk = ctx.endpointType === 'ark-video'
+
+  const body = isArk
+    ? {
+        model: ctx.modelName,
+        content: [{ type: 'text', text: prompt }],
+        resolution: '720p',
+        ratio: '16:9',
+        duration: 5,
+      }
+    : {
+        model: ctx.modelName,
+        prompt,
+        duration: 5,
+        metadata: { resolution: '720p' },
+      }
+  const bodyJson = JSON.stringify(body, null, 2)
+
+  if (lang === 'curl') {
+    return [
+      `# 1. Submit the generation task`,
+      `curl ${url} \\`,
+      `  -H "Authorization: Bearer $${ctx.apiKeyEnv}" \\`,
+      `  -H "Content-Type: application/json" \\`,
+      `  -d '${bodyJson.replace(/\n/g, '\n     ')}'`,
+      '',
+      `# 2. Poll until the task succeeds`,
+      `curl ${url}/$TASK_ID \\`,
+      `  -H "Authorization: Bearer $${ctx.apiKeyEnv}"`,
+    ].join('\n')
+  }
+
+  if (lang === 'python') {
+    return [
+      'import time',
+      '',
+      'import requests',
+      '',
+      `BASE_URL = "${ctx.baseUrl}"`,
+      'HEADERS = {"Authorization": "Bearer <YOUR_API_KEY>"}',
+      '',
+      `task = requests.post(`,
+      `    BASE_URL + "${ctx.endpointPath}",`,
+      '    headers=HEADERS,',
+      `    json=${bodyJson.replace(/\n/g, '\n    ')},`,
+      ').json()',
+      '',
+      'while True:',
+      `    result = requests.get(`,
+      `        BASE_URL + "${ctx.endpointPath}/" + task["id"], headers=HEADERS`,
+      '    ).json()',
+      '    if result["status"] in ("succeeded", "failed"):',
+      '        break',
+      '    time.sleep(5)',
+      '',
+      'print(result)',
+    ].join('\n')
+  }
+
+  const submitLines = [
+    `const submit = await fetch('${url}', {`,
+    `  method: 'POST',`,
+    `  headers: {`,
+    `    Authorization: \`Bearer \${process.env.${ctx.apiKeyEnv}}\`,`,
+    `    'Content-Type': 'application/json',`,
+    `  },`,
+    `  body: JSON.stringify(${bodyJson.replace(/\n/g, '\n  ')}),`,
+    `})`,
+    `const task = await submit.json()`,
+    '',
+    `// Poll until the task reaches a terminal status`,
+    `let result`,
+    `do {`,
+    `  await new Promise((r) => setTimeout(r, 5000))`,
+    `  const poll = await fetch(\`${url}/\${task.id}\`, {`,
+    `    headers: { Authorization: \`Bearer \${process.env.${ctx.apiKeyEnv}}\` },`,
+    `  })`,
+    `  result = await poll.json()`,
+    `} while (result.status !== 'succeeded' && result.status !== 'failed')`,
+    '',
+    `console.log(result)`,
+  ]
+  return submitLines.join('\n')
+}
+
 function buildSample(
   lang: Lang,
   endpointType: string,
@@ -433,6 +524,8 @@ function buildSample(
   if (endpointType === 'embeddings' || endpointType === 'jina-rerank')
     return buildEmbeddingSample(lang, ctx)
   if (endpointType === 'image-generation') return buildImageSample(lang, ctx)
+  if (endpointType === 'openai-video' || endpointType === 'ark-video')
+    return buildVideoSample(lang, ctx)
   return buildChatSample(lang, ctx)
 }
 
