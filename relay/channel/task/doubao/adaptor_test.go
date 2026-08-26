@@ -148,3 +148,38 @@ func TestParseTaskResultTerminalStatuses(t *testing.T) {
 		})
 	}
 }
+
+// 方舟官方协议入站时（middleware.ArkRequestConvert），整个官方请求体原样进 metadata。
+// 素材的 role（first_frame / last_frame / reference_*）以及参考视频、参考音频必须
+// 一路透传到上游请求体，否则首尾帧会退化成无标注参考图。
+func TestConvertToRequestPayloadPreservesArkContentRoles(t *testing.T) {
+	t.Parallel()
+
+	req := relaycommon.TaskSubmitReq{
+		Prompt: "keep the reference style",
+		Model:  "doubao-seedance-2-5-260628",
+		Metadata: map[string]any{
+			"resolution": "720p",
+			"content": []any{
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://x/first.png"}, "role": "first_frame"},
+				map[string]any{"type": "image_url", "image_url": map[string]any{"url": "https://x/last.png"}, "role": "last_frame"},
+				map[string]any{"type": "video_url", "video_url": map[string]any{"url": "https://x/motion.mp4"}, "role": "reference_video"},
+				map[string]any{"type": "audio_url", "audio_url": map[string]any{"url": "https://x/voice.wav"}, "role": "reference_audio"},
+				map[string]any{"type": "text", "text": "ignored, replaced by prompt"},
+			},
+		},
+	}
+
+	a := &TaskAdaptor{}
+	payload, err := a.convertToRequestPayload(&req)
+	require.NoError(t, err)
+
+	require.Len(t, payload.Content, 5)
+	assert.Equal(t, ContentItem{Type: "image_url", ImageURL: &MediaURL{URL: "https://x/first.png"}, Role: "first_frame"}, payload.Content[0])
+	assert.Equal(t, ContentItem{Type: "image_url", ImageURL: &MediaURL{URL: "https://x/last.png"}, Role: "last_frame"}, payload.Content[1])
+	assert.Equal(t, ContentItem{Type: "video_url", VideoURL: &MediaURL{URL: "https://x/motion.mp4"}, Role: "reference_video"}, payload.Content[2])
+	assert.Equal(t, ContentItem{Type: "audio_url", AudioURL: &MediaURL{URL: "https://x/voice.wav"}, Role: "reference_audio"}, payload.Content[3])
+	// 上游只认顶层 prompt：metadata.content 里的 text 项被剔除后重新追加到末尾。
+	assert.Equal(t, ContentItem{Type: "text", Text: "keep the reference style"}, payload.Content[4])
+	assert.Equal(t, "720p", payload.Resolution)
+}

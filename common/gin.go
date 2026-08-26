@@ -95,6 +95,23 @@ func GetBodyStorage(c *gin.Context) (BodyStorage, error) {
 	return bs, nil
 }
 
+// ReplaceRequestBody 用 data 覆盖当前请求体，供协议转换中间件在把外部协议改写成
+// 内部统一协议后使用。必须同时替换 KeyBodyStorage：GetRequestBody 优先读它，
+// 只设置 KeyRequestBody 的话后续 handler 仍然会拿到改写前的原始 body。
+func ReplaceRequestBody(c *gin.Context, data []byte) error {
+	storage, err := CreateBodyStorage(data)
+	if err != nil {
+		return err
+	}
+	CleanupBodyStorage(c)
+	c.Set(KeyBodyStorage, storage)
+	c.Set(KeyRequestBody, data)
+	c.Request.Body = io.NopCloser(bytes.NewReader(data))
+	c.Request.ContentLength = int64(len(data))
+	c.Request.Header.Set("Content-Type", "application/json")
+	return nil
+}
+
 // CleanupBodyStorage 清理请求体存储（应在请求结束时调用）
 func CleanupBodyStorage(c *gin.Context) {
 	if storage, exists := c.Get(KeyBodyStorage); exists && storage != nil {

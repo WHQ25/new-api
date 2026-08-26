@@ -31,6 +31,18 @@ func SetVideoRouter(router *gin.Engine) {
 		videoV1Router.GET("/videos/:task_id", controller.RelayTaskFetch)
 	}
 
+	// Ark (火山引擎方舟 / 豆包 Seedance) 官方视频协议入站兼容层：
+	// 客户端可以只改 base URL 就把官方 SDK 指向本网关。
+	// ArkRequestConvert 必须排在 Distribute 之前——它把请求体改写成内部统一形状，
+	// Distribute 才能从 body 顶层的 model 选出渠道。
+	arkVideoRouter := router.Group(middleware.ArkVideoTaskPath)
+	arkVideoRouter.Use(middleware.RouteTag("relay"))
+	arkVideoRouter.Use(middleware.ArkRequestConvert(), middleware.TokenAuth(), middleware.Distribute())
+	{
+		arkVideoRouter.POST("", controller.RelayTask)
+		arkVideoRouter.GET("/:task_id", controller.RelayTaskFetch)
+	}
+
 	klingV1Router := router.Group("/kling/v1")
 	klingV1Router.Use(middleware.RouteTag("relay"))
 	klingV1Router.Use(middleware.KlingRequestConvert(), middleware.TokenAuth(), middleware.Distribute())
