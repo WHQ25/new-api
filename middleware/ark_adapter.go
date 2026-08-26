@@ -502,7 +502,7 @@ func convertArkFetchResponse(body []byte) ([]byte, bool) {
 	}
 	// 官方协议约定 error 仅在失败时出现。cancelled / expired 是「没跑完」而非「跑失败」，
 	// 只有上游确实给了 error 时才带上，不再自造 task_failed。
-	if taskError := arkTaskError(upstream, task.FailReason, out["status"] == arkStatusFailed); taskError != nil {
+	if taskError := arkTaskError(upstream, out["status"] == arkStatusFailed); taskError != nil {
 		out["error"] = taskError
 	}
 	out["created_at"] = task.SubmitTime
@@ -612,14 +612,11 @@ func arkTaskTools(upstream map[string]any) []map[string]any {
 // 而按 task.Data 顶层 id 做精确替换并不可靠——ParseTaskResult 不要求上游响应带 id，
 // 一份只有 status 和 error 的响应同样会被记成 FAILURE，那时就没有可替换的串了。
 // 官方协议把「不暴露内部任务 ID」列为硬约束，这里只能 fail-closed。
-// 具体失败原因仍然完整保存在任务记录的 fail_reason 与服务端日志里，管理员可查。
-func arkTaskError(upstream map[string]any, failReason string, failed bool) map[string]any {
-	upstreamError, hasUpstreamError := upstream["error"].(map[string]any)
-	if !failed && !hasUpstreamError {
+// 具体失败原因不会丢：轮询入库时已经写进任务记录的 fail_reason 和 data，管理员可查。
+// 这里不再另外记日志——查询是可重复的，轮询会把同一条失败放大成无数行。
+func arkTaskError(upstream map[string]any, failed bool) map[string]any {
+	if _, hasUpstreamError := upstream["error"].(map[string]any); !failed && !hasUpstreamError {
 		return nil
-	}
-	if hasUpstreamError || failReason != "" {
-		common.SysError(fmt.Sprintf("ark video: redacted task failure, upstream_error=%v fail_reason=%s", upstreamError, failReason))
 	}
 	return map[string]any{"code": "task_failed", "message": "video generation failed"}
 }
