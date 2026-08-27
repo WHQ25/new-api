@@ -167,14 +167,11 @@ func requestVideoTokenVariants(req relaycommon.TaskSubmitReq) []string {
 	if metadataHasVideo(req.Metadata) {
 		variants = append(variants, billing_setting.VideoTokenVariantVideo)
 	}
-	// 指定音色必然是有声生成：可灵的价目表里「有声+音色」是「有声」的加价档，
-	// 只报 voice 会落到一个没人配置的 _voice 格子上，把请求打成 400。
-	hasVoice := metadataNonEmptyString(req.Metadata, "voice_id", "voice", "timbre")
-	if hasVoice || metadataBool(req.Metadata, "generate_audio", "audio") {
+	// 指定音色必然是有声生成：可灵这类模型只有在开口说话时才会带音色，
+	// 而请求体里可能只有 voice_id 而没有显式的 generate_audio。
+	if metadataNonEmptyString(req.Metadata, "voice_id", "voice", "timbre") ||
+		metadataBool(req.Metadata, "generate_audio", "audio") {
 		variants = append(variants, billing_setting.VideoTokenVariantAudio)
-	}
-	if hasVoice {
-		variants = append(variants, billing_setting.VideoTokenVariantVoice)
 	}
 	return variants
 }

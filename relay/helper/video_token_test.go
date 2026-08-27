@@ -171,8 +171,8 @@ func TestEstimateVideoTokenBillingPerSecond(t *testing.T) {
 	})
 	require.NoError(t, config.GlobalConfig.LoadFromDB(map[string]string{
 		"billing_setting.video_token_price": `{"kling-v3":{
-			"sec:720p":0.6,"sec:720p_audio":0.9,"sec:720p_audio_voice":1.1,
-			"sec:1080p":0.8,"sec:1080p_audio":1.2,"sec:1080p_audio_voice":1.4}}`,
+			"sec:720p":0.6,"sec:720p_audio":0.9,
+			"sec:1080p":0.8,"sec:1080p_audio":1.2}}`,
 	}))
 
 	cases := []struct {
@@ -197,11 +197,12 @@ func TestEstimateVideoTokenBillingPerSecond(t *testing.T) {
 			wantUnits: 5,
 		},
 		{
-			// 指定音色隐含有声：只报 voice 会落到没配价的 _voice 格子上。
+			// 指定音色隐含有声：请求体可能只带 voice_id 而没有显式的 generate_audio，
+			// 漏掉这个信号会把有声生成按无声档收钱。
 			name:      "voice implies audio",
 			req:       relaycommon.TaskSubmitReq{Duration: 5, Metadata: map[string]interface{}{"resolution": "720p", "voice_id": "zh_female_01"}},
-			wantKey:   "sec:720p_audio_voice",
-			wantPrice: 1.1,
+			wantKey:   "sec:720p_audio",
+			wantPrice: 0.9,
 			wantUnits: 5,
 		},
 		{

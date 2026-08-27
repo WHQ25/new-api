@@ -66,13 +66,13 @@ func TestLookupVideoTokenPricePerToken(t *testing.T) {
 }
 
 func TestLookupVideoTokenPricePerSecond(t *testing.T) {
-	// 可灵官方价目：分辨率 × 音频档，单价 ¥/秒。
+	// 可灵官方价目：分辨率 × 视频输入 × 音频档，单价 ¥/秒。
 	loadBillingSetting(t, map[string]string{
 		"billing_setting.billing_mode": `{"kling-v3":"video_token"}`,
 		"billing_setting.video_token_price": `{"kling-v3":{
-			"sec:720p":0.6,"sec:720p_audio":0.9,"sec:720p_audio_voice":1.1,
-			"sec:1080p":0.8,"sec:1080p_audio":1.2,"sec:1080p_audio_voice":1.4,
-			"sec:4k":3.0,"sec:4k_audio":3.0,"sec:4k_audio_voice":3.0}}`,
+			"sec:720p":0.6,"sec:720p_audio":0.9,"sec:720p_video":0.8,"sec:720p_video_audio":1.1,
+			"sec:1080p":0.8,"sec:1080p_audio":1.2,"sec:1080p_video":1.0,"sec:1080p_video_audio":1.4,
+			"sec:4k":3.0,"sec:4k_audio":3.0,"sec:4k_video":3.0,"sec:4k_video_audio":3.0}}`,
 	})
 
 	assert.Equal(t, VideoTokenUnitSecond, GetVideoTokenUnit("kling-v3"))
@@ -86,8 +86,9 @@ func TestLookupVideoTokenPricePerSecond(t *testing.T) {
 	}{
 		{"720p silent", "720p", nil, "sec:720p", 0.6},
 		{"720p audio", "720P", []string{VideoTokenVariantAudio}, "sec:720p_audio", 0.9},
-		{"1080p audio + voice", "1080p", []string{VideoTokenVariantAudio, VideoTokenVariantVoice}, "sec:1080p_audio_voice", 1.4},
-		{"variant order is normalized", "1080p", []string{VideoTokenVariantVoice, VideoTokenVariantAudio}, "sec:1080p_audio_voice", 1.4},
+		{"1080p video input + audio", "1080p", []string{VideoTokenVariantVideo, VideoTokenVariantAudio}, "sec:1080p_video_audio", 1.4},
+		{"variant order is normalized", "1080p", []string{VideoTokenVariantAudio, VideoTokenVariantVideo}, "sec:1080p_video_audio", 1.4},
+		{"audio without video input has its own row", "1080p", []string{VideoTokenVariantAudio}, "sec:1080p_audio", 1.2},
 		{"4k silent", "2160p", nil, "sec:4k", 3.0},
 	}
 	for _, tc := range cases {

@@ -39,13 +39,12 @@ const (
 	videoTokenSecondPrefix = "sec:"
 )
 
-// Variant flags qualify a tariff row beyond its resolution. They are appended to
-// the tier in this exact order, so "1080p" with {audio, voice} is the cell
-// "sec:1080p_audio_voice".
+// Variant flags qualify a tariff row beyond its resolution. They are independent
+// dimensions appended to the tier in this exact order, so "1080p" with
+// {video, audio} is the cell "sec:1080p_video_audio".
 const (
 	VideoTokenVariantVideo = "video" // request carries video input (Seedance)
 	VideoTokenVariantAudio = "audio" // request asks for generated audio (Kling)
-	VideoTokenVariantVoice = "voice" // request pins a voice/timbre (Kling)
 )
 
 var videoTokenTiers = []string{
@@ -58,7 +57,6 @@ var videoTokenTiers = []string{
 var videoTokenVariants = []string{
 	VideoTokenVariantVideo,
 	VideoTokenVariantAudio,
-	VideoTokenVariantVoice,
 }
 
 // VideoTokenTariff is the tariff cell a request resolved to.

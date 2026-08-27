@@ -40,26 +40,12 @@ import {
   numericDraftRegex,
   videoTokenCellKey,
   videoTokenTableShape,
+  videoTokenVariantColumns,
   type VideoTokenPriceTable,
   type VideoTokenResolution,
   type VideoTokenUnit,
   type VideoTokenVariant,
 } from './model-pricing-core'
-
-/**
- * Columns of a tariff grid: the bare resolution plus every prefix of the
- * selected variant list. Kling's "silent / audio / audio+voice" ladder and
- * Seedance's "no video input / with video input" pair are both prefixes, which
- * is also what the backend assumes when it builds a cell key.
- */
-function videoTokenVariantColumns(
-  variants: readonly VideoTokenVariant[]
-): VideoTokenVariant[][] {
-  return variants.reduce<VideoTokenVariant[][]>(
-    (columns, variant) => [...columns, [...(columns.at(-1) ?? []), variant]],
-    [[]]
-  )
-}
 
 export function VideoTokenPriceGrid(props: {
   value: VideoTokenPriceTable

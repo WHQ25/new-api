@@ -367,7 +367,12 @@ export function getTieredBillingSummary(
  * The cell key carries its own unit: a "sec:" prefix means the price is per
  * second of requested video, anything else is the original per-1M-token meter.
  * The remaining segments are the resolution followed by the variant flags that
- * qualified the row ("video", "audio", "voice").
+ * qualified the row.
+ *
+ * "voice" is no longer a pricing dimension — a timbre now bills as plain audio —
+ * but logs written while it existed still carry "..._audio_voice" cells, so the
+ * label stays here to keep that history readable. Do not copy it into the
+ * pricing config: VIDEO_TOKEN_VARIANTS is the list an operator can still price.
  */
 export const VIDEO_TOKEN_VARIANT_LABELS: Record<string, string> = {
   video: 'With video input',

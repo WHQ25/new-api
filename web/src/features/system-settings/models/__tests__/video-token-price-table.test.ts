@@ -6,6 +6,7 @@ import {
   serializeVideoTokenPriceTable,
   videoTokenCellKey,
   videoTokenTableShape,
+  videoTokenVariantColumns,
 } from '../model-pricing-core'
 
 // The tariff cell key is the wire format shared with the backend: the "sec:"
@@ -17,8 +18,8 @@ describe('video token tariff cell keys', () => {
     expect(videoTokenCellKey('per_token', '720p', [])).toBe('720p')
     expect(videoTokenCellKey('per_token', '720p', ['video'])).toBe('720p_video')
     expect(videoTokenCellKey('per_second', '1080p', [])).toBe('sec:1080p')
-    expect(videoTokenCellKey('per_second', '1080p', ['voice', 'audio'])).toBe(
-      'sec:1080p_audio_voice'
+    expect(videoTokenCellKey('per_second', '1080p', ['audio', 'video'])).toBe(
+      'sec:1080p_video_audio'
     )
   })
 
@@ -31,9 +32,9 @@ describe('video token tariff cell keys', () => {
       videoTokenTableShape({
         'sec:720p': '0.6',
         'sec:720p_audio': '0.9',
-        'sec:720p_audio_voice': '1.1',
+        'sec:720p_video_audio': '1.1',
       })
-    ).toEqual({ unit: 'per_second', variants: ['audio', 'voice'] })
+    ).toEqual({ unit: 'per_second', variants: ['video', 'audio'] })
     expect(videoTokenTableShape({})).toEqual({
       unit: 'per_token',
       variants: [],
@@ -54,18 +55,18 @@ describe('video token table parsing', () => {
     ).toEqual({ '480p': '6.7', '720p': '7' })
   })
 
-  // 后端只会按 video → audio → voice 的规范序、每个变体至多一次去查表，
+  // 后端只会按 video → audio 的规范序、每个变体至多一次去查表，
   // 非规范拼法配了也永远查不到，留在表里只会让运营以为「已配置」而请求全被 400。
   it('rejects keys the backend would never look up', () => {
     expect(
       parseVideoTokenPriceTable({
-        'sec:1080p_audio_voice': 1.4,
-        'sec:1080p_voice_audio': 9,
+        'sec:1080p_video_audio': 1.4,
+        'sec:1080p_audio_video': 9,
         'sec:720p_audio_audio': 9,
       })
-    ).toEqual({ 'sec:1080p_audio_voice': '1.4' })
+    ).toEqual({ 'sec:1080p_video_audio': '1.4' })
     expect(
-      serializeVideoTokenPriceTable({ 'sec:1080p_voice_audio': '9' })
+      serializeVideoTokenPriceTable({ 'sec:1080p_audio_video': '9' })
     ).toEqual({})
   })
 
@@ -87,5 +88,35 @@ describe('video token table parsing', () => {
       'sec:720p_audio': 0.9,
     })
     expect(countVideoTokenPrices(table)).toBe(2)
+  })
+})
+
+// 每个变体都是独立维度：可灵按有无声音加价而与视频输入无关，Seedance 按有无视频
+// 输入加价而与声音无关，同一个模型两种维度都开时必须能分别定价。旧实现只生成选中
+// 变体的前缀链，配了 video+audio 就永远出不来「基础+有声」这一格，请求落到
+// sec:720p_audio 上直接 400。
+describe('video token tariff grid columns', () => {
+  it('spans every combination the backend can look up', () => {
+    expect(videoTokenVariantColumns([])).toEqual([[]])
+    expect(videoTokenVariantColumns(['audio'])).toEqual([[], ['audio']])
+    expect(videoTokenVariantColumns(['video', 'audio'])).toEqual([
+      [],
+      ['video'],
+      ['audio'],
+      ['video', 'audio'],
+    ])
+  })
+
+  it('builds a lookupable key for every column', () => {
+    expect(
+      videoTokenVariantColumns(['video', 'audio']).map((column) =>
+        videoTokenCellKey('per_second', '720p', column)
+      )
+    ).toEqual([
+      'sec:720p',
+      'sec:720p_video',
+      'sec:720p_audio',
+      'sec:720p_video_audio',
+    ])
   })
 })

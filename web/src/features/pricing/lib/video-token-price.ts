@@ -2,7 +2,7 @@ import type { PricingModel, TokenUnit } from '../types'
 import { formatDynamicUnitPrice } from './dynamic-price'
 
 export const VIDEO_TOKEN_RESOLUTIONS = ['480p', '720p', '1080p', '4k'] as const
-export const VIDEO_TOKEN_VARIANTS = ['video', 'audio', 'voice'] as const
+export const VIDEO_TOKEN_VARIANTS = ['video', 'audio'] as const
 export const VIDEO_TOKEN_SECOND_PREFIX = 'sec:'
 
 export type VideoTokenResolution = (typeof VIDEO_TOKEN_RESOLUTIONS)[number]
@@ -12,7 +12,6 @@ export type VideoTokenUnit = 'per_token' | 'per_second'
 export const VIDEO_TOKEN_VARIANT_LABELS: Record<VideoTokenVariant, string> = {
   video: 'With video input',
   audio: 'With audio',
-  voice: 'With voice',
 }
 
 export type VideoTokenCell = {
@@ -52,8 +51,8 @@ export function videoTokenCellKey(
 /**
  * Splits a tariff cell key into its dimensions, rejecting anything the backend
  * would never build. A key is valid only if it round-trips through
- * videoTokenCellKey unchanged, so "sec:1080p_voice_audio" and "720p_audio_audio"
- * are refused: the backend only ever looks up "sec:1080p_audio_voice" and
+ * videoTokenCellKey unchanged, so "sec:1080p_audio_video" and "720p_audio_audio"
+ * are refused: the backend only ever looks up "sec:1080p_video_audio" and
  * "720p_audio", and accepting the non-canonical spellings would show an operator
  * a configured price that every request then rejects with a 400.
  */
@@ -110,7 +109,32 @@ export function getVideoTokenCells(model: PricingModel): VideoTokenCell[] {
   return cells
 }
 
-/** Variant columns present in the table, ordered least to most qualified. */
+/**
+ * Columns of a tariff grid: every variant combination the backend can look up.
+ * The dimensions are independent — a request can carry video input without
+ * audio, audio without video input, or both — so the grid is the full subset
+ * lattice of the selected variants, not a prefix ladder.
+ */
+export function videoTokenVariantColumns(
+  variants: readonly VideoTokenVariant[]
+): VideoTokenVariant[][] {
+  return VIDEO_TOKEN_VARIANTS.filter((variant) => variants.includes(variant))
+    .reduce<VideoTokenVariant[][]>(
+      (columns, variant) => [
+        ...columns,
+        ...columns.map((column) => [...column, variant]),
+      ],
+      [[]]
+    )
+    .sort((a, b) => a.length - b.length)
+}
+
+/**
+ * Variant columns present in the table, ordered least to most qualified. The
+ * tie-break keeps same-width columns in VIDEO_TOKEN_VARIANTS order so this table
+ * and the admin editor's grid lay the combinations out identically, instead of
+ * inheriting whatever order the serialized price map happened to arrive in.
+ */
 export function getVideoTokenVariantColumns(
   model: PricingModel
 ): VideoTokenVariant[][] {
@@ -118,7 +142,14 @@ export function getVideoTokenVariantColumns(
   for (const cell of getVideoTokenCells(model)) {
     seen.set(cell.variants.join('_'), cell.variants)
   }
-  return [...seen.values()].sort((a, b) => a.length - b.length)
+  const rank = (variants: VideoTokenVariant[]) =>
+    variants.reduce(
+      (acc, variant) => acc + (1 << VIDEO_TOKEN_VARIANTS.indexOf(variant)),
+      0
+    )
+  return [...seen.values()].sort(
+    (a, b) => a.length - b.length || rank(a) - rank(b)
+  )
 }
 
 export function getVideoTokenPriceRange(
