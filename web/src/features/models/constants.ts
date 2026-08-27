@@ -172,6 +172,10 @@ export const ENDPOINT_TEMPLATES: Record<
     path: '/api/v3/contents/generations/tasks',
     method: 'POST',
   },
+  'kling-video': {
+    path: '/text-to-video/kling-3.0',
+    method: 'POST',
+  },
 }
 
 // ============================================================================

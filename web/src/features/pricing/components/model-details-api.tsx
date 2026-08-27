@@ -524,7 +524,11 @@ function buildSample(
   if (endpointType === 'embeddings' || endpointType === 'jina-rerank')
     return buildEmbeddingSample(lang, ctx)
   if (endpointType === 'image-generation') return buildImageSample(lang, ctx)
-  if (endpointType === 'openai-video' || endpointType === 'ark-video')
+  if (
+    endpointType === 'openai-video' ||
+    endpointType === 'ark-video' ||
+    endpointType === 'kling-video'
+  )
     return buildVideoSample(lang, ctx)
   return buildChatSample(lang, ctx)
 }

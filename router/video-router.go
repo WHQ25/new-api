@@ -43,6 +43,19 @@ func SetVideoRouter(router *gin.Engine) {
 		arkVideoRouter.GET("/:task_id", controller.RelayTaskFetch)
 	}
 
+	// 可灵 3.0 / 3.0 Omni 官方协议入站兼容层。官方把型号编在路径里，请求体没有 model
+	// 字段，所以 KlingV3RequestConvert 必须排在 Distribute 之前——它按路径推导出模型名
+	// 写进 body 顶层，Distribute 才能据此选出渠道。
+	klingV3Router := router.Group("")
+	klingV3Router.Use(middleware.RouteTag("relay"))
+	klingV3Router.Use(middleware.KlingV3RequestConvert(), middleware.TokenAuth(), middleware.Distribute())
+	{
+		klingV3Router.POST(middleware.KlingV3TextToVideoPath, controller.RelayTask)
+		klingV3Router.POST(middleware.KlingV3ImageToVideoPath, controller.RelayTask)
+		klingV3Router.POST(middleware.KlingV3OmniVideoPath, controller.RelayTask)
+		klingV3Router.GET(middleware.KlingV3TasksPath, controller.RelayTaskFetch)
+	}
+
 	klingV1Router := router.Group("/kling/v1")
 	klingV1Router.Use(middleware.RouteTag("relay"))
 	klingV1Router.Use(middleware.KlingRequestConvert(), middleware.TokenAuth(), middleware.Distribute())

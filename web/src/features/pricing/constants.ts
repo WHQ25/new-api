@@ -76,6 +76,7 @@ export const ENDPOINT_TYPES = {
   EMBEDDINGS: 'embeddings',
   OPENAI_VIDEO: 'openai-video',
   ARK_VIDEO: 'ark-video',
+  KLING_VIDEO: 'kling-video',
 } as const
 
 export type EndpointTypeOption =
@@ -96,6 +97,7 @@ export function getEndpointTypeLabels(
     [ENDPOINT_TYPES.EMBEDDINGS]: t('Embeddings'),
     [ENDPOINT_TYPES.OPENAI_VIDEO]: t('Video'),
     [ENDPOINT_TYPES.ARK_VIDEO]: 'Ark Video',
+    [ENDPOINT_TYPES.KLING_VIDEO]: 'Kling Video',
   }
 }
 

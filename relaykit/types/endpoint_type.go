@@ -17,6 +17,7 @@ const (
 	EndpointTypeEmbeddings            EndpointType = "embeddings"
 	EndpointTypeOpenAIVideo           EndpointType = "openai-video"
 	EndpointTypeArkVideo              EndpointType = "ark-video"
+	EndpointTypeKlingVideo            EndpointType = "kling-video"
 )
 
 // Finish reasons shared by the OpenAI-compatible response formats.

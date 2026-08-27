@@ -35,6 +35,9 @@ var defaultEndpointInfoMap = map[constant.EndpointType]EndpointInfo{
 	// 不能反向依赖 middleware，所以路径在这里重复了一次；两者一致由
 	// router.TestArkVideoDefaultEndpointMatchesRegisteredRoute 守住。
 	constant.EndpointTypeArkVideo: {Path: "/api/v3/contents/generations/tasks", Method: "POST"},
+	// 可灵 3.0 官方视频协议的入站兼容层，路由注册在 middleware.KlingV3TextToVideoPath。
+	// 同样不能反向依赖 middleware，一致性由 router 的路由注册测试守住。
+	constant.EndpointTypeKlingVideo: {Path: "/text-to-video/kling-3.0", Method: "POST"},
 }
 
 // GetDefaultEndpointInfo 返回指定端点类型的默认信息以及是否存在
