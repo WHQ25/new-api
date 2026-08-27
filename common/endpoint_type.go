@@ -30,7 +30,7 @@ func GetEndpointTypesByChannelType(channelType int, modelName string) []constant
 	// 漏掉它们会落到下面的 default 分支报成 openai，模型广场就把视频模型标成 Chat，
 	// 调用方照着去打 /v1/chat/completions 只会拿到 404。
 	// Jimeng 不在此列：它另有一个同步图像适配器。
-	case constant.ChannelTypeSora, constant.ChannelTypeKling, constant.ChannelTypeVidu:
+	case constant.ChannelTypeSora, constant.ChannelTypeKling, constant.ChannelTypeVidu, constant.ChannelTypeWeToken:
 		endpointTypes = []constant.EndpointType{constant.EndpointTypeOpenAIVideo}
 	// 豆包视频额外支持方舟官方协议入站（middleware.ArkRequestConvert）。只有它支持：
 	// 该入站层把方舟请求原样塞进 metadata，唯一能还原成上游请求体的是 doubao 适配器，

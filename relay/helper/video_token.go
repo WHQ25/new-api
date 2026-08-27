@@ -164,7 +164,7 @@ func estimateVideoTokenBilling(modelName string, req relaycommon.TaskSubmitReq, 
 // providers that do not price it.
 func requestVideoTokenVariants(req relaycommon.TaskSubmitReq) []string {
 	variants := make([]string, 0, len(billing_setting.VideoTokenVariants()))
-	if metadataHasVideo(req.Metadata) {
+	if req.HasMediaType(relaycommon.TaskMediaTypeVideo) {
 		variants = append(variants, billing_setting.VideoTokenVariantVideo)
 	}
 	// 指定音色必然是有声生成：可灵这类模型只有在开口说话时才会带音色，
@@ -209,33 +209,6 @@ func normalizeAspectRatio(tier, ratio string) string {
 		return normalized
 	}
 	return videoTokenDefaultRatio
-}
-
-func metadataHasVideo(metadata map[string]interface{}) bool {
-	if metadata == nil {
-		return false
-	}
-	contentRaw, ok := metadata["content"]
-	if !ok {
-		return false
-	}
-	contentSlice, ok := contentRaw.([]interface{})
-	if !ok {
-		return false
-	}
-	for _, item := range contentSlice {
-		itemMap, ok := item.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if itemMap["type"] == "video_url" {
-			return true
-		}
-		if _, has := itemMap["video_url"]; has {
-			return true
-		}
-	}
-	return false
 }
 
 // metadataBool reads a boolean tariff signal that clients may send as a JSON
