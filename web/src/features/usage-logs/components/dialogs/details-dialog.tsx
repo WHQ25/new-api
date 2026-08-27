@@ -70,6 +70,7 @@ import {
   parseAuditLine,
   decodeBillingExprB64,
   getTieredBillingSummary,
+  formatVideoTokenTier,
   getVideoTokenBillingSummary,
   hasAnyCacheTokens,
   isViolationFeeLog,
@@ -297,13 +298,21 @@ function BillingBreakdown(props: {
     if (videoTokenSummary.resolution) {
       rows.push({
         label: t('Matched Tier'),
-        value: `${videoTokenSummary.resolution} · ${videoTokenSummary.hasVideo ? t('With video input') : t('No video input')}`,
+        value: formatVideoTokenTier(videoTokenSummary, t),
       })
     }
-    if (videoTokenSummary.usdPerM != null) {
+    if (videoTokenSummary.unitPrice != null) {
       rows.push({
         label: t('Price'),
-        value: `${fmtPrice(videoTokenSummary.usdPerM)}/M`,
+        value: videoTokenSummary.perSecond
+          ? `${fmtPrice(videoTokenSummary.unitPrice)}/s`
+          : `${fmtPrice(videoTokenSummary.unitPrice)}/M`,
+      })
+    }
+    if (videoTokenSummary.billedSeconds != null) {
+      rows.push({
+        label: t('Billed duration'),
+        value: `${videoTokenSummary.billedSeconds}s`,
       })
     }
     if (videoTokenSummary.estimatedTokens != null) {

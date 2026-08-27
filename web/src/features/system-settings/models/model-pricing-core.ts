@@ -19,6 +19,17 @@ For commercial licensing, please contact support@quantumnous.com
 import * as z from 'zod'
 
 import { combineBillingExpr } from '@/features/pricing/lib/billing-expr'
+import {
+  VIDEO_TOKEN_RESOLUTIONS,
+  VIDEO_TOKEN_SECOND_PREFIX,
+  VIDEO_TOKEN_VARIANTS,
+  VIDEO_TOKEN_VARIANT_LABELS,
+  parseVideoTokenKey,
+  videoTokenCellKey,
+  type VideoTokenResolution,
+  type VideoTokenUnit,
+  type VideoTokenVariant,
+} from '@/features/pricing/lib/video-token-price'
 
 import { formatPricingNumber } from './pricing-format'
 
@@ -45,43 +56,56 @@ export type PricingMode =
   | 'tiered_expr'
   | 'video_token'
 
-export const VIDEO_TOKEN_RESOLUTIONS = ['480p', '720p', '1080p', '4k'] as const
+// The tariff cell key grammar lives in the pricing feature so the admin editor
+// and the public pricing page cannot drift apart — and, through the canonical
+// round-trip in parseVideoTokenKey, cannot drift from the backend either.
+export {
+  VIDEO_TOKEN_RESOLUTIONS,
+  VIDEO_TOKEN_SECOND_PREFIX,
+  VIDEO_TOKEN_VARIANTS,
+  VIDEO_TOKEN_VARIANT_LABELS,
+  videoTokenCellKey,
+  type VideoTokenResolution,
+  type VideoTokenUnit,
+  type VideoTokenVariant,
+}
 
-export type VideoTokenResolution = (typeof VIDEO_TOKEN_RESOLUTIONS)[number]
+export type VideoTokenPriceTable = Record<string, string>
 
-export type VideoTokenPriceTable = Partial<
-  Record<`${VideoTokenResolution}` | `${VideoTokenResolution}_video`, string>
->
+export const emptyVideoTokenPriceTable = (): VideoTokenPriceTable => ({})
 
-export const emptyVideoTokenPriceTable = (): VideoTokenPriceTable => ({
-  '480p': '',
-  '480p_video': '',
-  '720p': '',
-  '720p_video': '',
-  '1080p': '',
-  '1080p_video': '',
-  '4k': '',
-  '4k_video': '',
-})
+/** The unit and variant dimensions an existing table already prices. */
+export const videoTokenTableShape = (
+  table?: VideoTokenPriceTable | Record<string, number> | null
+): { unit: VideoTokenUnit; variants: VideoTokenVariant[] } => {
+  const keys = Object.keys(table ?? {})
+  const unit: VideoTokenUnit = keys.some((key) =>
+    key.startsWith(VIDEO_TOKEN_SECOND_PREFIX)
+  )
+    ? 'per_second'
+    : 'per_token'
+  const variants = VIDEO_TOKEN_VARIANTS.filter((variant) =>
+    keys.some((key) => key.split('_').includes(variant))
+  )
+  return { unit, variants }
+}
 
-export const videoTokenPriceKeys: Array<keyof VideoTokenPriceTable> = [
-  '480p',
-  '480p_video',
-  '720p',
-  '720p_video',
-  '1080p',
-  '1080p_video',
-  '4k',
-  '4k_video',
-]
-
+/**
+ * A table meters in exactly one unit. The backend rejects a table that mixes
+ * "sec:" and bare keys outright, so the editor drops the cells that do not
+ * belong to the resolved unit instead of loading a config that cannot bill.
+ */
 export const parseVideoTokenPriceTable = (
   raw?: Record<string, number> | VideoTokenPriceTable | null
 ): VideoTokenPriceTable => {
   const table = emptyVideoTokenPriceTable()
   if (!raw) return table
-  for (const key of videoTokenPriceKeys) {
-    const value = raw[key]
+  const { unit } = videoTokenTableShape(raw)
+  for (const [key, value] of Object.entries(raw)) {
+    if (!parseVideoTokenKey(key)) continue
+    if (key.startsWith(VIDEO_TOKEN_SECOND_PREFIX) !== (unit === 'per_second')) {
+      continue
+    }
     if (value === undefined || value === null || value === '') continue
     const numeric = typeof value === 'number' ? value : Number(value)
     if (Number.isFinite(numeric) && numeric > 0) {
@@ -96,20 +120,16 @@ export const serializeVideoTokenPriceTable = (
 ): Record<string, number> => {
   const out: Record<string, number> = {}
   if (!table) return out
-  for (const key of videoTokenPriceKeys) {
-    const numeric = toNumberOrNull(table[key] || '')
+  for (const [key, value] of Object.entries(table)) {
+    if (!parseVideoTokenKey(key)) continue
+    const numeric = toNumberOrNull(value || '')
     if (numeric !== null && numeric > 0) out[key] = numeric
   }
   return out
 }
 
 export const countVideoTokenPrices = (table?: VideoTokenPriceTable) =>
-  table
-    ? videoTokenPriceKeys.filter((key) => {
-        const numeric = toNumberOrNull(table[key] || '')
-        return numeric !== null && numeric > 0
-      }).length
-    : 0
+  Object.keys(serializeVideoTokenPriceTable(table)).length
 
 export type LaneKey =
   | 'completion'

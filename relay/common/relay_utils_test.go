@@ -140,3 +140,105 @@ func TestTaskDurationBounds(t *testing.T) {
 		})
 	}
 }
+
+// 计费按精确小写 key 读 metadata，适配器却把整份 metadata 交给 encoding/json，
+// 后者匹配字段名是大小写不敏感的。两边看到的不是同一份值时，请求会按一个档位收费、
+// 按另一个档位生成——例如 GENERATE_AUDIO 按无声档收钱却生成有声视频。
+func TestCanonicalizeMetadataKeys(t *testing.T) {
+	cases := []struct {
+		name     string
+		metadata map[string]any
+		want     map[string]any
+	}{
+		{
+			name:     "nil stays nil",
+			metadata: nil,
+			want:     nil,
+		},
+		{
+			name:     "already canonical is untouched",
+			metadata: map[string]any{"resolution": "720p", "generate_audio": true},
+			want:     map[string]any{"resolution": "720p", "generate_audio": true},
+		},
+		{
+			name:     "mixed case keys are lowered",
+			metadata: map[string]any{"DURATION": 10, "GenerateAudio": true, "Resolution": "1080p"},
+			want:     map[string]any{"duration": 10, "generateaudio": true, "resolution": "1080p"},
+		},
+		{
+			name:     "an exact lowercase key wins a collision",
+			metadata: map[string]any{"duration": 5, "DURATION": 10},
+			want:     map[string]any{"duration": 5},
+		},
+		{
+			// 上游的 content 项是结构体，大小写不敏感地吃下 "TYPE"/"VIDEO_URL"，
+			// 计费侧却按精确小写键判断有没有视频输入。嵌套层不归一化 = 少收。
+			name: "nested map keys inside slices are lowered too",
+			metadata: map[string]any{
+				"Content": []any{map[string]any{"TYPE": "video_url", "VideoUrl": map[string]any{"URL": "https://example.com/a.mp4"}}},
+			},
+			want: map[string]any{
+				"content": []any{map[string]any{"type": "video_url", "videourl": map[string]any{"url": "https://example.com/a.mp4"}}},
+			},
+		},
+		{
+			// 通义万相的生成参数装在 parameters 这层里。
+			name: "nested parameters container is lowered",
+			metadata: map[string]any{
+				"Parameters": map[string]any{"DURATION": 10, "Resolution": "1080P"},
+			},
+			want: map[string]any{
+				"parameters": map[string]any{"duration": 10, "resolution": "1080P"},
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, CanonicalizeMetadataKeys(tc.metadata))
+		})
+	}
+}
+
+// 归一化之后，计费读到的时长/音频档必须与下发给上游的请求体一致。
+func TestCanonicalizedMetadataDrivesBillingDimensions(t *testing.T) {
+	req := TaskSubmitReq{
+		Metadata: CanonicalizeMetadataKeys(map[string]any{
+			"RESOLUTION":     "1080p",
+			"DURATION":       10,
+			"GENERATE_AUDIO": true,
+		}),
+	}
+	assert.Equal(t, "1080p", req.RequestedResolution())
+	assert.Equal(t, 10, req.RequestedOutputSeconds())
+	assert.Equal(t, true, req.Metadata["generate_audio"])
+}
+
+// -1（由上游自选时长）是方舟的私有约定，只有显式开了 option 的适配器才放行。
+// 默认放行会让 -1 一路级联到不认识它的下游节点：那边按自己的默认时长预扣，
+// 而最终那个上游按时长区间的上界生成，差额由运营方承担。
+func TestValidateTaskDurationBoundsGuardsSelfSelectSentinel(t *testing.T) {
+	// 默认拒绝。
+	for _, req := range []TaskSubmitReq{{Duration: DurationSelfSelect}, {Seconds: "-1"}} {
+		taskErr := validateTaskDurationBounds(req)
+		require.NotNil(t, taskErr)
+		assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	}
+
+	// 显式开启后放行。
+	assert.Nil(t, validateTaskDurationBounds(TaskSubmitReq{Duration: DurationSelfSelect}, AllowSelfSelectedDuration()))
+	assert.Nil(t, validateTaskDurationBounds(TaskSubmitReq{Seconds: "-1"}, AllowSelfSelectedDuration()))
+
+	assert.Nil(t, validateTaskDurationBounds(TaskSubmitReq{Duration: 5}))
+
+	// 放行哨兵不等于放行其它非法时长。
+	for _, req := range []TaskSubmitReq{
+		{Duration: -2},
+		{Seconds: "-5"},
+		{Duration: MaxTaskDurationSeconds + 1},
+	} {
+		taskErr := validateTaskDurationBounds(req, AllowSelfSelectedDuration())
+		require.NotNil(t, taskErr)
+		assert.Equal(t, http.StatusBadRequest, taskErr.StatusCode)
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -886,6 +887,91 @@ func (t *TaskSubmitReq) HasImage() bool {
 	return len(t.Images) > 0
 }
 
+// DurationSelfSelect 是「由上游模型自选时长」的哨兵值，取自方舟 duration = -1 的官方约定。
+// 它与「未指定时长」不同：未指定时上游按自己的默认时长生成，自选时上游会在该模型的
+// 时长区间内挑一个，最长可到区间上界。计费必须能区分这两者，否则会按默认时长预扣、
+// 按区间上界生成。RequestedOutputSeconds 对两者都返回 0；需要区分的上游用
+// RequestsSelfSelectedDuration 判断，并通过 VideoBillingResolver 给出实际计费时长。
+const DurationSelfSelect = -1
+
+// RequestsSelfSelectedDuration 判断客户端是否显式要求由上游自选时长。
+// 顶层 duration/seconds 与 metadata 都认，取值来源与 RequestedOutputSeconds 一致。
+func (t *TaskSubmitReq) RequestsSelfSelectedDuration() bool {
+	if t.Duration == DurationSelfSelect {
+		return true
+	}
+	if t.Duration == 0 {
+		if sec, err := strconv.Atoi(t.Seconds); err == nil && sec == DurationSelfSelect {
+			return true
+		}
+	}
+	if t.Duration != 0 || t.Seconds != "" {
+		return false
+	}
+	// BoundedIntFromAny 会拒掉所有负数，这里必须读原始值才能认出哨兵。
+	for _, key := range []string{"duration", "seconds"} {
+		raw, ok := MetadataValue(t.Metadata, key)
+		if !ok {
+			continue
+		}
+		if sec, ok := StrictIntFromAny(raw); ok {
+			return sec == DurationSelfSelect
+		}
+	}
+	return false
+}
+
+// StrictIntFromAny 读出 metadata 里的整数，保留负号，并且只接受数学意义上的整数。
+//
+// 与 BoundedIntFromAny 的区别是刻意的：那个是给用量饱和转换用的，会截断（29.9 → 29）
+// 也会钳位。用在契约校验上会把 29.9 帧当成合法的 29 帧收下，预扣之后请求体才因为
+// 类型不符失败；-1.5 也会被截成 -1，误认成「由模型自选时长」的哨兵。
+func StrictIntFromAny(raw any) (int, bool) {
+	var n float64
+	switch v := raw.(type) {
+	case int:
+		return v, true
+	case int32:
+		return int(v), true
+	case int64:
+		if v > math.MaxInt32 || v < math.MinInt32 {
+			return 0, false
+		}
+		return int(v), true
+	case uint:
+		if uint64(v) > math.MaxInt32 {
+			return 0, false
+		}
+		return int(v), true
+	case uint32:
+		if uint64(v) > math.MaxInt32 {
+			return 0, false
+		}
+		return int(v), true
+	case uint64:
+		if v > math.MaxInt32 {
+			return 0, false
+		}
+		return int(v), true
+	case float32:
+		n = float64(v)
+	case float64:
+		n = v
+	case string:
+		parsed, err := strconv.Atoi(strings.TrimSpace(v))
+		if err != nil || parsed > math.MaxInt32 || parsed < math.MinInt32 {
+			return 0, false
+		}
+		return parsed, true
+	default:
+		return 0, false
+	}
+	if math.IsNaN(n) || math.IsInf(n, 0) || n != math.Trunc(n) || n > math.MaxInt32 || n < math.MinInt32 {
+		return 0, false
+	}
+	return int(n), true
+}
+
 // RequestedOutputSeconds 返回客户端显式请求的输出时长（秒），未指定时返回 0。
 // 客户端可以把时长写在顶层 duration/seconds 或 metadata 里，计费估算和上游请求体
 // 必须从同一个来源取值：否则会出现按请求时长计费、却让上游按自己的默认时长生成。
@@ -897,7 +983,7 @@ func (t *TaskSubmitReq) RequestedOutputSeconds() int {
 		return sec
 	}
 	for _, key := range []string{"duration", "seconds"} {
-		raw, ok := t.Metadata[key]
+		raw, ok := MetadataValue(t.Metadata, key)
 		if !ok {
 			continue
 		}
@@ -906,6 +992,169 @@ func (t *TaskSubmitReq) RequestedOutputSeconds() int {
 		}
 	}
 	return 0
+}
+
+// RequestedResolution 返回客户端请求的输出分辨率档位（480p/720p/1080p/4k），未指定时返回空串。
+// 与 RequestedOutputSeconds 同一契约：计费估算和上游请求体必须从这里取值，否则会出现
+// 按一个分辨率计费、却让上游按另一个分辨率生成。
+//
+// metadata.resolution 优先于顶层 size：metadata 是显式的上游原生字段（方舟官方协议入站时
+// 整个请求体都在里面），size 只是统一协议的像素串，需要推导。显式值不该被推导值覆盖。
+// 无法识别时返回空串而不是猜一个默认档位——video_token 计费依赖它报 missing_resolution，
+// 静默兜底成 720p 会把「说不清要什么」变成「按 720p 收费、按上游默认生成」。
+func (t *TaskSubmitReq) RequestedResolution() string {
+	if resolution := resolutionTierOrRaw(metadataStringValue(t.Metadata, "resolution")); resolution != "" {
+		return resolution
+	}
+	return resolutionTierOrRaw(t.Size)
+}
+
+// resolutionTierOrRaw 归一化分辨率档位，认不出来时原样返回。
+// 空串表示「没提供」，据此报 missing_resolution；认不出来的标签（"1440p"）必须保留原值，
+// 否则调用方拿到的是「你没提供分辨率」而不是「这个分辨率不支持」。
+func resolutionTierOrRaw(value string) string {
+	value = strings.TrimSpace(value)
+	if tier := normalizeResolutionTier(value); tier != "" {
+		return tier
+	}
+	return value
+}
+
+// RequestedAspectRatio 返回客户端请求的宽高比，未指定或无法识别时返回空串。
+// 只识别计费像素表覆盖的三种比例：识别出表外的比例并下发给上游，会让上游按该比例生成、
+// 计费却回退按 16:9 估算，凭空造出新的计费偏差。返回空串时上游用它自己的默认值，
+// 与改动前的行为一致。
+func (t *TaskSubmitReq) RequestedAspectRatio() string {
+	for _, key := range []string{"ratio", "aspect_ratio"} {
+		if ratio := normalizeVideoAspectRatio(metadataStringValue(t.Metadata, key)); ratio != "" {
+			return ratio
+		}
+	}
+	return normalizeVideoAspectRatio(t.Size)
+}
+
+// normalizeResolutionTier 把分辨率档位标签（"720p"）或像素串（"1280x720"）归一成档位字面量。
+func normalizeResolutionTier(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "":
+		return ""
+	case "480p", "480", "sd":
+		return "480p"
+	case "720p", "720", "hd":
+		return "720p"
+	case "1080p", "1080", "fhd":
+		return "1080p"
+	case "4k", "2160p", "2160", "uhd":
+		return "4k"
+	}
+	width, height, ok := parseVideoSize(value)
+	if !ok {
+		return ""
+	}
+	// 按短边定档：480p/720p/1080p 说的是横屏的垂直分辨率，竖屏 720x1280 同样是 720p。
+	// 用长边会把每个竖屏请求都抬高一档。
+	shortSide := min(width, height)
+	switch {
+	case shortSide <= 480:
+		return "480p"
+	case shortSide <= 720:
+		return "720p"
+	case shortSide <= 1080:
+		return "1080p"
+	default:
+		return "4k"
+	}
+}
+
+// normalizeVideoAspectRatio 把比例标签（"16:9"）或像素串（"1280x720"）归一成比例字面量。
+func normalizeVideoAspectRatio(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	switch value {
+	case "":
+		return ""
+	case "16:9", "16x9":
+		return "16:9"
+	case "4:3", "4x3":
+		return "4:3"
+	case "1:1", "1x1":
+		return "1:1"
+	case "3:4", "3x4":
+		return "3:4"
+	case "9:16", "9x16":
+		return "9:16"
+	case "21:9", "21x9":
+		return "21:9"
+	// 方舟按任务类型和输入内容自动选比例，是 Seedance 1.5 及以上的默认值。
+	// 认下来才能原样下发；计费按 16:9 估算，见 normalizeAspectRatio。
+	case "adaptive":
+		return "adaptive"
+	}
+	width, height, ok := parseVideoSize(value)
+	if !ok {
+		return ""
+	}
+	switch {
+	case width == height:
+		return "1:1"
+	case width*9 == height*16:
+		return "16:9"
+	case width*16 == height*9:
+		return "9:16"
+	case width*3 == height*4:
+		return "4:3"
+	case width*4 == height*3:
+		return "3:4"
+	case width*9 == height*21:
+		return "21:9"
+	default:
+		return ""
+	}
+}
+
+// parseVideoSize 解析 "1280x720" / "1280*720" 形式的像素串。
+func parseVideoSize(value string) (int, int, bool) {
+	separator := strings.IndexAny(value, "x*")
+	if separator <= 0 {
+		return 0, 0, false
+	}
+	width, err := strconv.Atoi(strings.TrimSpace(value[:separator]))
+	if err != nil || width <= 0 {
+		return 0, 0, false
+	}
+	height, err := strconv.Atoi(strings.TrimSpace(value[separator+1:]))
+	if err != nil || height <= 0 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+// MetadataValue 读取 metadata 里的字段，缺失或为 null 时返回 false。
+//
+// 只读顶层。metadata 的嵌套形状是各上游私有的（通义万相把生成参数装在 parameters 里，
+// 方舟把素材装在 content 里），在这里统一去读某一层嵌套会把一个上游的语义扩散给所有
+// 上游：Sora 原样转发请求体，读它的 metadata.parameters.duration 就会按一个上游根本
+// 不认识的字段收费。需要投影原生形状的上游在自己的适配器里做，见 ali 的
+// projectAliBillingDimensions。
+func MetadataValue(metadata map[string]interface{}, key string) (interface{}, bool) {
+	if metadata == nil {
+		return nil, false
+	}
+	value, ok := metadata[key]
+	if !ok || value == nil {
+		return nil, false
+	}
+	return value, true
+}
+
+// metadataStringValue 读取 metadata 里的字符串字段，缺失或类型不符时返回空串。
+func metadataStringValue(metadata map[string]interface{}, key string) string {
+	value, ok := MetadataValue(metadata, key)
+	if !ok {
+		return ""
+	}
+	str, _ := value.(string)
+	return str
 }
 
 func (t *TaskSubmitReq) UnmarshalJSON(data []byte) error {

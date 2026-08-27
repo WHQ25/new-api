@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
@@ -132,7 +131,90 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *taskdto.TaskError) {
 	// ValidateMultipartDirect 负责解析并将原始 TaskSubmitReq 存入 context
-	return relaycommon.ValidateMultipartDirect(c, info)
+	if taskErr = relaycommon.ValidateMultipartDirect(c, info); taskErr != nil {
+		return taskErr
+	}
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return service.TaskErrorWrapperLocal(err, "get_task_request_failed", http.StatusBadRequest)
+	}
+	// 必须在计价之前跑：计价读的是统一协议的扁平 metadata，万相认的是原生的 parameters。
+	// Metadata 是 map，就地改写对 context 里的同一份请求生效。
+	projectAliBillingDimensions(req.Metadata)
+	return nil
+}
+
+// projectAliBillingDimensions 把万相原生的 metadata.parameters 与统一协议的扁平 metadata
+// 合成同一份值，让计费读到的与下发给上游的一定是同一个数。
+//
+// 两个方向本来都是错的：适配器只把 metadata 反序列化进 parameters 这层，所以扁平
+// metadata.resolution 只被计费读到、从不下发（多收）；而 metadata.parameters.duration
+// 只下发、从不被计费读到（少收）。投影必须留在万相自己的适配器里——parameters 这层是
+// 它的原生形状，通用取值口去读它会把这个语义扩散给根本没有这层的上游。
+//
+// 冲突时嵌套值胜出，因为反序列化让它最终生效；顶层 duration 字段仍然优先于两者，
+// 由 RequestedOutputSeconds 与随后的回填共同保证。
+func projectAliBillingDimensions(metadata map[string]interface{}) {
+	if metadata == nil {
+		return
+	}
+	nested, _ := metadata["parameters"].(map[string]interface{})
+	if nested == nil {
+		nested = map[string]interface{}{}
+	}
+
+	syncAliBillingDimension(metadata, nested, "duration")
+	// 计费把 generate_audio 与 audio 视作同一个有声档信号，两个拼法都要下发，
+	// 否则 generate_audio 的请求会按有声档收费、上游却收不到 audio 参数。
+	syncAliBillingDimension(metadata, nested, "audio", "generate_audio")
+
+	// 分辨率不能走通用的双向合并。万相的 size 是 T2V 的像素串、resolution 是 I2V 的
+	// 档位，两个字段各有各的契约：把 size 抄成 resolution 会让上游同时收到两个竞争
+	// 的分辨率字段，甚至直接 400。size 只投影到扁平一侧供计费归档。
+	switch {
+	case aliDimensionValue(nested, "resolution") != nil:
+		metadata["resolution"] = nested["resolution"]
+	case aliDimensionValue(nested, "size") != nil:
+		metadata["resolution"] = nested["size"]
+	case aliDimensionValue(metadata, "resolution") != nil:
+		nested["resolution"] = metadata["resolution"]
+	}
+
+	if len(nested) > 0 {
+		metadata["parameters"] = nested
+	}
+}
+
+// syncAliBillingDimension 让一个计费维度在扁平 metadata 与原生 parameters 里取同一个值。
+// aliases 是计费侧接受的其它扁平拼法，必须一起对齐：计费对有声档取的是各拼法的或，
+// 留一个取值不同的别名在原地，{"generate_audio":true,"audio":false} 就会按有声档
+// 收费、上游却不生成音频。
+func syncAliBillingDimension(metadata, nested map[string]interface{}, key string, aliases ...string) {
+	names := append([]string{key}, aliases...)
+	winner, found := nested[key], nested[key] != nil
+	if !found {
+		for _, name := range names {
+			if value := aliDimensionValue(metadata, name); value != nil {
+				winner, found = value, true
+				break
+			}
+		}
+	}
+	if !found {
+		return
+	}
+	nested[key] = winner
+	for _, name := range names {
+		metadata[name] = winner
+	}
+}
+
+func aliDimensionValue(source map[string]interface{}, key string) interface{} {
+	value, ok := source[key]
+	if !ok {
+		return nil
+	}
+	return value
 }
 
 func (a *TaskAdaptor) BuildRequestURL(info *relaycommon.RelayInfo) (string, error) {
@@ -406,21 +488,6 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 		}
 	}
 
-	// 处理时长
-	if req.Duration > 0 {
-		aliReq.Parameters.Duration = req.Duration
-	} else if req.Seconds != "" {
-		seconds, err := strconv.Atoi(req.Seconds)
-		if err != nil {
-			return nil, errors.Wrap(err, "convert seconds to int failed")
-		} else {
-			aliReq.Parameters.Duration = seconds
-		}
-	}
-	if aliReq.Parameters.Duration <= 0 {
-		aliReq.Parameters.Duration = 5 // 默认5秒
-	}
-
 	// 从 metadata 中提取额外参数
 	if req.Metadata != nil {
 		if metadataBytes, err := common.Marshal(req.Metadata); err == nil {
@@ -431,6 +498,17 @@ func (a *TaskAdaptor) convertToAliRequest(info *relaycommon.RelayInfo, req relay
 		} else {
 			return nil, errors.Wrap(err, "marshal metadata failed")
 		}
+	}
+
+	// 时长必须与计费同源，且只能在反序列化之后定值。万相的原生请求体把生成参数放在
+	// parameters 这层，metadata 会整体覆盖上面写入的值：metadata.parameters.duration=10
+	// 的请求否则会按默认 5 秒收费、按 10 秒生成。RequestedOutputSeconds 同样优先读
+	// parameters，两边不可能算出不同的秒数。
+	if seconds := req.RequestedOutputSeconds(); seconds > 0 {
+		aliReq.Parameters.Duration = seconds
+	}
+	if aliReq.Parameters.Duration <= 0 {
+		aliReq.Parameters.Duration = 5 // 默认5秒
 	}
 
 	if aliReq.Model != upstreamModel {

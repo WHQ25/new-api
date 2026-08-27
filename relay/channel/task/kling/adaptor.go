@@ -287,6 +287,10 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 	if err := taskcommon.UnmarshalMetadata(req.Metadata, &r); err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
 	}
+	// 时长必须与计费同源。metadata 反序列化会覆盖上面写入的默认值，所以只在这之后定值：
+	// 否则 duration=5 配 metadata.duration=15 的请求会按 5 秒收费、按 15 秒生成。
+	// 可灵按秒计费时这就是每次请求少收三分之二。
+	r.Duration = fmt.Sprintf("%d", taskcommon.DefaultInt(req.RequestedOutputSeconds(), 5))
 	return &r, nil
 }
 

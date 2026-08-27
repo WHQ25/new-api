@@ -75,6 +75,7 @@ import {
 import { formatFixedPrice, formatGroupPrice } from '../lib/price'
 import {
   getVideoTokenCompactSummary,
+  getVideoTokenUnit,
   isVideoTokenPricingModel,
 } from '../lib/video-token-price'
 import type {
@@ -592,9 +593,11 @@ function PriceSection(props: {
       <section>
         <SectionTitle>{t('Base Price')}</SectionTitle>
         <p className='text-muted-foreground mb-3 text-xs'>
-          {t(
-            'Per 1M tokens, split by resolution and whether the request includes video input.'
-          )}
+          {getVideoTokenUnit(props.model) === 'per_second'
+            ? t(
+                'Per second of generated video, split by resolution and variant.'
+              )
+            : t('Per 1M tokens, split by resolution and variant.')}
         </p>
         <VideoTokenPriceGrid
           model={props.model}
@@ -981,7 +984,10 @@ function GroupPricingSection(props: {
           </table>
         </div>
         <p className='text-muted-foreground/40 mt-1.5 text-[10px]'>
-          {t('Prices shown per')} {tokenUnitLabel} tokens
+          {t('Prices shown per')}{' '}
+          {getVideoTokenUnit(props.model) === 'per_second'
+            ? 's'
+            : `${tokenUnitLabel} tokens`}
         </p>
       </section>
     )

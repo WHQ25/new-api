@@ -111,7 +111,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 		seconds = req.Duration
 	}
 	if seconds <= 0 {
-		seconds = 4
+		seconds = defaultOutputSeconds
 	}
 
 	size := req.Size
@@ -285,6 +285,23 @@ func (a *TaskAdaptor) GetModelList() []string {
 
 func (a *TaskAdaptor) GetChannelName() string {
 	return ChannelName
+}
+
+// defaultOutputSeconds 是 Sora 在请求不带 seconds 时生成的时长。
+const defaultOutputSeconds = 4
+
+// ResolveVideoBilling 让视频阶梯计费按Sora真实的默认时长估算，
+// 否则不带时长的请求会按通用的 5 秒收费、拿到 4 秒的视频。见 channel.VideoBillingResolver。
+func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (float64, *dto.TaskError) {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return 0, service.TaskErrorWrapperLocal(err, "get_task_request_failed", http.StatusBadRequest)
+	}
+	// 客户端指定了时长就按通用规则计费，这里只补上游的默认值。
+	if req.RequestedOutputSeconds() > 0 {
+		return 0, nil
+	}
+	return defaultOutputSeconds, nil
 }
 
 func (a *TaskAdaptor) ParseTaskResult(respBody []byte) (*relaycommon.TaskInfo, error) {

@@ -31,9 +31,11 @@ type PriceData struct {
 	QuotaToPreConsume    int // 按量计费的预消耗额度
 	GroupRatioInfo       GroupRatioInfo
 	BillingMode          string  // ratio / tiered_expr / video_token
-	VideoTokenPrice      float64 // snapshot: USD per 1M tokens for the selected tariff cell
-	VideoTokenTier       string  // snapshot: 480p / 720p_video / ...
-	EstimatedTokens      float64 // snapshot: pre-consume token estimate
+	VideoTokenPrice      float64 // snapshot: tariff cell price ($/1M tokens or $/second)
+	VideoTokenTier       string  // snapshot: 480p / 720p_video / sec:1080p_audio / ...
+	VideoTokenUnit       string  // snapshot: per_token / per_second
+	VideoTokenSeconds    float64 // snapshot: billed seconds, per_second tariffs only
+	EstimatedTokens      float64 // snapshot: pre-consume token estimate, per_token tariffs only
 }
 
 func (p *PriceData) AddOtherRatio(key string, ratio float64) {

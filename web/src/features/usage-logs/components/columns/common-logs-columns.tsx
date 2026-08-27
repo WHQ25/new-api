@@ -49,6 +49,7 @@ import type { UsageLog } from '../../data/schema'
 import {
   formatModelName,
   getTieredBillingSummary,
+  formatVideoTokenTier,
   getVideoTokenBillingSummary,
   hasAnyCacheTokens,
   parseLogOther,
@@ -220,22 +221,32 @@ function buildTypeDetailSegments(
       })
     }
   } else if (videoTokenSummary) {
-    const tierLabel = videoTokenSummary.resolution
-      ? `${videoTokenSummary.resolution} · ${videoTokenSummary.hasVideo ? t('With video input') : t('No video input')}`
-      : t('Video tiers')
+    const tierLabel = formatVideoTokenTier(videoTokenSummary, t)
+    let priceLabel: string | null = null
+    if (videoTokenSummary.unitPrice != null) {
+      priceLabel = videoTokenSummary.perSecond
+        ? `${formatPriceCompact(videoTokenSummary.unitPrice)}/s`
+        : formatPrice(videoTokenSummary.unitPrice)
+    }
     segments.push({
-      text:
-        videoTokenSummary.usdPerM != null
-          ? `${tierLabel} · ${formatPrice(videoTokenSummary.usdPerM)}`
-          : tierLabel,
+      text: priceLabel ? `${tierLabel} · ${priceLabel}` : tierLabel,
     })
-    const tokens =
-      videoTokenSummary.settledTokens ?? videoTokenSummary.estimatedTokens
-    if (tokens != null) {
-      segments.push({
-        text: `${t('Tokens')} ${formatTokens(tokens)}`,
-        muted: true,
-      })
+    if (videoTokenSummary.perSecond) {
+      if (videoTokenSummary.billedSeconds != null) {
+        segments.push({
+          text: `${videoTokenSummary.billedSeconds}s`,
+          muted: true,
+        })
+      }
+    } else {
+      const tokens =
+        videoTokenSummary.settledTokens ?? videoTokenSummary.estimatedTokens
+      if (tokens != null) {
+        segments.push({
+          text: `${t('Tokens')} ${formatTokens(tokens)}`,
+          muted: true,
+        })
+      }
     }
   } else {
     const modelPrice = other.model_price

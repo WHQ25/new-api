@@ -3358,7 +3358,6 @@
     "per": "per",
     "Per 1K tokens": "Mỗi 1K tokens",
     "Per 1M tokens": "Mỗi 1M tokens",
-    "Per 1M tokens, split by resolution and whether the request includes video input.": "Theo từng triệu token, chia theo độ phân giải và có/không có đầu vào video.",
     "per request": "theo yêu cầu",
     "Per request": "Mỗi yêu cầu",
     "Per Request": "Theo yêu cầu",
@@ -4969,7 +4968,6 @@
     "USD": "USD",
     "USD Exchange Rate": "Tỷ giá USD",
     "USD price per 1M input tokens.": "Giá USD cho mỗi 1 triệu token đầu vào.",
-    "USD price per 1M tokens for each resolution and input type.": "Giá USD / 1 triệu token theo độ phân giải và loại đầu vào.",
     "USD price per 1M tokens.": "Giá USD cho mỗi 1 triệu token.",
     "Use +: to add a group, -: to remove a default selectable group, or no prefix to append a group.": "Dùng +: để thêm nhóm, -: để xóa nhóm có thể chọn mặc định, hoặc không có tiền tố để nối nhóm.",
     "Use a compatible browser or device with biometric authentication or a security key to register a Passkey.": "Sử dụng trình duyệt hoặc thiết bị tương thích có xác thực sinh trắc học hoặc khóa bảo mật để đăng ký Khóa truy cập.",
@@ -5290,6 +5288,15 @@
     "Zero retention": "Không lưu dữ liệu",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "With audio": "Có âm thanh",
+    "With voice": "Có giọng nói",
+    "Billed duration": "Thời lượng tính phí",
+    "Per second": "Theo giây",
+    "Billing unit": "Đơn vị tính phí",
+    "Base": "Cơ bản",
+    "Per second of generated video, split by resolution and variant.": "Theo giây video được tạo, phân theo độ phân giải và biến thể.",
+    "Per 1M tokens, split by resolution and variant.": "Theo 1M token, phân theo độ phân giải và biến thể.",
+    "USD price for each resolution and variant. Pick the billing unit the provider publishes: per 1M tokens (Seedance) or per second (Kling, Wan, Vidu).": "Giá USD cho từng độ phân giải và biến thể. Chọn đơn vị tính phí mà nhà cung cấp công bố: theo 1M token (Seedance) hoặc theo giây (Kling, Wan, Vidu)."
   }
 }

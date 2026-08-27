@@ -114,16 +114,18 @@ type TaskPrivateData struct {
 
 // TaskBillingContext 记录任务提交时的计费参数，以便轮询阶段可以重新计算额度。
 type TaskBillingContext struct {
-	ModelPrice      float64            `json:"model_price,omitempty"`       // 模型单价
-	GroupRatio      float64            `json:"group_ratio,omitempty"`       // 分组倍率
-	ModelRatio      float64            `json:"model_ratio,omitempty"`       // 模型倍率
-	OtherRatios     map[string]float64 `json:"other_ratios,omitempty"`      // 附加倍率（时长、分辨率等）
-	OriginModelName string             `json:"origin_model_name,omitempty"` // 模型名称，必须为OriginModelName
-	PerCallBilling  bool               `json:"per_call_billing,omitempty"`  // 按次计费：跳过轮询阶段的差额结算
-	BillingMode     string             `json:"billing_mode,omitempty"`      // ratio / video_token / ...
-	VideoTokenPrice float64            `json:"video_token_price,omitempty"` // 提交时选中的档位单价（$/1M tokens）
-	VideoTokenTier  string             `json:"video_token_tier,omitempty"`  // 提交时选中的档位
-	EstimatedTokens float64            `json:"estimated_tokens,omitempty"`  // 提交时按像素公式估算的 token
+	ModelPrice        float64            `json:"model_price,omitempty"`         // 模型单价
+	GroupRatio        float64            `json:"group_ratio,omitempty"`         // 分组倍率
+	ModelRatio        float64            `json:"model_ratio,omitempty"`         // 模型倍率
+	OtherRatios       map[string]float64 `json:"other_ratios,omitempty"`        // 附加倍率（时长、分辨率等）
+	OriginModelName   string             `json:"origin_model_name,omitempty"`   // 模型名称，必须为OriginModelName
+	PerCallBilling    bool               `json:"per_call_billing,omitempty"`    // 按次计费：跳过轮询阶段的差额结算
+	BillingMode       string             `json:"billing_mode,omitempty"`        // ratio / video_token / ...
+	VideoTokenPrice   float64            `json:"video_token_price,omitempty"`   // 提交时选中的档位单价（$/1M tokens 或 $/秒）
+	VideoTokenTier    string             `json:"video_token_tier,omitempty"`    // 提交时选中的档位
+	VideoTokenUnit    string             `json:"video_token_unit,omitempty"`    // 档位计量单位：per_token / per_second（空=per_token 旧数据）
+	VideoTokenSeconds float64            `json:"video_token_seconds,omitempty"` // 按秒计费时下单锁定的时长
+	EstimatedTokens   float64            `json:"estimated_tokens,omitempty"`    // 提交时按像素公式估算的 token
 }
 
 // GetUpstreamTaskID 获取上游真实 task ID（用于与 provider 通信）

@@ -591,18 +591,25 @@ func RelayTask(c *gin.Context) {
 		task.PrivateData.SubscriptionId = relayInfo.SubscriptionId
 		task.PrivateData.TokenId = relayInfo.TokenId
 		task.PrivateData.NodeName = common.NodeName
+		// 按秒计费的视频档位在下单时就用「请求时长 × 档位单价」定死了金额，上游回报的
+		// token 数是另一套口径，拿它做差额结算会把账算成完全不同的量级。
+		perCallBilling := relayInfo.PriceData.VideoTokenUnit == billing_setting.VideoTokenUnitSecond
+		if relayInfo.PriceData.BillingMode != billing_setting.BillingModeVideoToken {
+			perCallBilling = common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice
+		}
 		task.PrivateData.BillingContext = &model.TaskBillingContext{
-			ModelPrice:      relayInfo.PriceData.ModelPrice,
-			GroupRatio:      relayInfo.PriceData.GroupRatioInfo.GroupRatio,
-			ModelRatio:      relayInfo.PriceData.ModelRatio,
-			OtherRatios:     relayInfo.PriceData.OtherRatios(),
-			OriginModelName: relayInfo.OriginModelName,
-			PerCallBilling: relayInfo.PriceData.BillingMode != billing_setting.BillingModeVideoToken &&
-				(common.StringsContains(constant.TaskPricePatches, relayInfo.OriginModelName) || relayInfo.PriceData.UsePrice),
-			BillingMode:     relayInfo.PriceData.BillingMode,
-			VideoTokenPrice: relayInfo.PriceData.VideoTokenPrice,
-			VideoTokenTier:  relayInfo.PriceData.VideoTokenTier,
-			EstimatedTokens: relayInfo.PriceData.EstimatedTokens,
+			ModelPrice:        relayInfo.PriceData.ModelPrice,
+			GroupRatio:        relayInfo.PriceData.GroupRatioInfo.GroupRatio,
+			ModelRatio:        relayInfo.PriceData.ModelRatio,
+			OtherRatios:       relayInfo.PriceData.OtherRatios(),
+			OriginModelName:   relayInfo.OriginModelName,
+			PerCallBilling:    perCallBilling,
+			BillingMode:       relayInfo.PriceData.BillingMode,
+			VideoTokenPrice:   relayInfo.PriceData.VideoTokenPrice,
+			VideoTokenTier:    relayInfo.PriceData.VideoTokenTier,
+			VideoTokenUnit:    relayInfo.PriceData.VideoTokenUnit,
+			VideoTokenSeconds: relayInfo.PriceData.VideoTokenSeconds,
+			EstimatedTokens:   relayInfo.PriceData.EstimatedTokens,
 		}
 		task.Quota = result.Quota
 		task.Data = result.TaskData

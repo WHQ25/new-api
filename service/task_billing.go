@@ -63,7 +63,14 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	if info.PriceData.VideoTokenTier != "" {
 		other["video_token_tier"] = info.PriceData.VideoTokenTier
 		other["video_token_price"] = info.PriceData.VideoTokenPrice
-		other["estimated_tokens"] = info.PriceData.EstimatedTokens
+		if info.PriceData.VideoTokenUnit != "" {
+			other["video_token_unit"] = info.PriceData.VideoTokenUnit
+		}
+		if info.PriceData.VideoTokenSeconds > 0 {
+			other["video_token_seconds"] = info.PriceData.VideoTokenSeconds
+		} else {
+			other["estimated_tokens"] = info.PriceData.EstimatedTokens
+		}
 	}
 	attachQuotaSaturation(c, info, other)
 	model.RecordConsumeLog(c, info.UserId, model.RecordConsumeLogParams{
@@ -142,7 +149,14 @@ func taskBillingOther(task *model.Task) map[string]interface{} {
 		if bc.BillingMode == billing_setting.BillingModeVideoToken {
 			other["video_token_tier"] = bc.VideoTokenTier
 			other["video_token_price"] = bc.VideoTokenPrice
-			other["estimated_tokens"] = bc.EstimatedTokens
+			if bc.VideoTokenUnit != "" {
+				other["video_token_unit"] = bc.VideoTokenUnit
+			}
+			if bc.VideoTokenSeconds > 0 {
+				other["video_token_seconds"] = bc.VideoTokenSeconds
+			} else {
+				other["estimated_tokens"] = bc.EstimatedTokens
+			}
 		} else {
 			other["model_price"] = bc.ModelPrice
 		}
@@ -364,6 +378,14 @@ func RecalculateTaskQuotaByTokens(ctx context.Context, task *model.Task, totalTo
 		totalTokens = relaycommon.MaxVideoTotalTokens
 	}
 	audit.SettledTokens = totalTokens
+
+	// 按秒档位的单价是 $/秒，与上游回报的 token 数不是同一个量纲：拿 token 数乘进去
+	// 会算出一个高出六个数量级的金额。下单时已按「请求时长 × 单价」定价，无需差额结算。
+	// settleTaskBillingOnComplete 也会因 PerCallBilling 提前返回，这里是第二道闸。
+	if bc := task.PrivateData.BillingContext; bc != nil && bc.VideoTokenUnit == billing_setting.VideoTokenUnitSecond {
+		logger.LogInfo(ctx, fmt.Sprintf("任务 %s 按秒计费，跳过 token 差额结算", task.TaskID))
+		return
+	}
 
 	if bc := task.PrivateData.BillingContext; bc != nil && bc.BillingMode == billing_setting.BillingModeVideoToken && bc.VideoTokenPrice > 0 {
 		groupRatio, ok := taskSnapshotGroupRatio(ctx, task)

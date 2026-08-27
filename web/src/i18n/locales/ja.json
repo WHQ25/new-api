@@ -3358,7 +3358,6 @@
     "per": "あたり",
     "Per 1K tokens": "1Kトークンあたり",
     "Per 1M tokens": "1Mトークンあたり",
-    "Per 1M tokens, split by resolution and whether the request includes video input.": "100万トークンあたり。解像度と動画入力の有無で分かれます。",
     "per request": "リクエストごと",
     "Per request": "リクエストごと",
     "Per Request": "リクエストごと",
@@ -4969,7 +4968,6 @@
     "USD": "USD",
     "USD Exchange Rate": "USD 為替レート",
     "USD price per 1M input tokens.": "100万入力トークンあたりのUSD価格。",
-    "USD price per 1M tokens for each resolution and input type.": "解像度と動画入力の有無ごとに、100万トークンあたりのドル単価を設定します。",
     "USD price per 1M tokens.": "100万トークンあたりのUSD価格。",
     "Use +: to add a group, -: to remove a default selectable group, or no prefix to append a group.": "+: はグループ追加、-: はデフォルト選択可能グループの削除、接頭辞なしはグループ追記に使います。",
     "Use a compatible browser or device with biometric authentication or a security key to register a Passkey.": "生体認証またはセキュリティキーを備えた互換性のあるブラウザまたはデバイスを使用して、パスキーを登録してください。",
@@ -5290,6 +5288,15 @@
     "Zero retention": "データ保持なし",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V 4",
-    "Zoom": "ズーム"
+    "Zoom": "ズーム",
+    "With audio": "音声あり",
+    "With voice": "音色指定",
+    "Billed duration": "課金時間",
+    "Per second": "秒単位",
+    "Billing unit": "課金単位",
+    "Base": "基本",
+    "Per second of generated video, split by resolution and variant.": "生成動画の秒数単位。解像度とバリアントで区分されます。",
+    "Per 1M tokens, split by resolution and variant.": "100万トークン単位。解像度とバリアントで区分されます。",
+    "USD price for each resolution and variant. Pick the billing unit the provider publishes: per 1M tokens (Seedance) or per second (Kling, Wan, Vidu).": "解像度とバリアントごとの USD 単価。プロバイダーが公表する課金単位（Seedance は 100万トークン、Kling・Wan・Vidu は秒）を選択してください。"
   }
 }

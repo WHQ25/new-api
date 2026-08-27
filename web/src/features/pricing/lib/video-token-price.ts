@@ -2,14 +2,24 @@ import type { PricingModel, TokenUnit } from '../types'
 import { formatDynamicUnitPrice } from './dynamic-price'
 
 export const VIDEO_TOKEN_RESOLUTIONS = ['480p', '720p', '1080p', '4k'] as const
+export const VIDEO_TOKEN_VARIANTS = ['video', 'audio', 'voice'] as const
+export const VIDEO_TOKEN_SECOND_PREFIX = 'sec:'
 
 export type VideoTokenResolution = (typeof VIDEO_TOKEN_RESOLUTIONS)[number]
+export type VideoTokenVariant = (typeof VIDEO_TOKEN_VARIANTS)[number]
+export type VideoTokenUnit = 'per_token' | 'per_second'
+
+export const VIDEO_TOKEN_VARIANT_LABELS: Record<VideoTokenVariant, string> = {
+  video: 'With video input',
+  audio: 'With audio',
+  voice: 'With voice',
+}
 
 export type VideoTokenCell = {
   key: string
   resolution: VideoTokenResolution
-  hasVideo: boolean
-  usdPerM: number
+  variants: VideoTokenVariant[]
+  price: number
 }
 
 type VideoTokenFormatOptions = {
@@ -18,6 +28,65 @@ type VideoTokenFormatOptions = {
   priceRate?: number
   usdExchangeRate?: number
   groupRatioMultiplier?: number
+}
+
+/**
+ * Builds the canonical tariff cell key. This is the single definition of the key
+ * grammar shared with the backend's VideoTokenPriceKey: unit prefix, resolution,
+ * then the variant flags in VIDEO_TOKEN_VARIANTS order, each at most once.
+ */
+export function videoTokenCellKey(
+  unit: VideoTokenUnit,
+  resolution: VideoTokenResolution,
+  variants: readonly VideoTokenVariant[]
+): string {
+  const suffix = VIDEO_TOKEN_VARIANTS.filter((variant) =>
+    variants.includes(variant)
+  )
+    .map((variant) => `_${variant}`)
+    .join('')
+  const prefix = unit === 'per_second' ? VIDEO_TOKEN_SECOND_PREFIX : ''
+  return `${prefix}${resolution}${suffix}`
+}
+
+/**
+ * Splits a tariff cell key into its dimensions, rejecting anything the backend
+ * would never build. A key is valid only if it round-trips through
+ * videoTokenCellKey unchanged, so "sec:1080p_voice_audio" and "720p_audio_audio"
+ * are refused: the backend only ever looks up "sec:1080p_audio_voice" and
+ * "720p_audio", and accepting the non-canonical spellings would show an operator
+ * a configured price that every request then rejects with a 400.
+ */
+export function parseVideoTokenKey(key: string): VideoTokenCell | null {
+  const perSecond = key.startsWith(VIDEO_TOKEN_SECOND_PREFIX)
+  const [resolution, ...variants] = (
+    perSecond ? key.slice(VIDEO_TOKEN_SECOND_PREFIX.length) : key
+  ).split('_')
+  if (
+    !VIDEO_TOKEN_RESOLUTIONS.includes(resolution as VideoTokenResolution) ||
+    !variants.every((v) => VIDEO_TOKEN_VARIANTS.includes(v as VideoTokenVariant))
+  ) {
+    return null
+  }
+  const cell: VideoTokenCell = {
+    key,
+    resolution: resolution as VideoTokenResolution,
+    variants: variants as VideoTokenVariant[],
+    price: 0,
+  }
+  const unit: VideoTokenUnit = perSecond ? 'per_second' : 'per_token'
+  if (videoTokenCellKey(unit, cell.resolution, cell.variants) !== key) {
+    return null
+  }
+  return cell
+}
+
+export function getVideoTokenUnit(model: PricingModel): VideoTokenUnit {
+  return Object.keys(model.video_token_price ?? {}).some((key) =>
+    key.startsWith(VIDEO_TOKEN_SECOND_PREFIX)
+  )
+    ? 'per_second'
+    : 'per_token'
 }
 
 export function isVideoTokenPricingModel(model: PricingModel): boolean {
@@ -31,43 +100,63 @@ export function getVideoTokenCells(model: PricingModel): VideoTokenCell[] {
   if (!table) return []
 
   const cells: VideoTokenCell[] = []
-  for (const resolution of VIDEO_TOKEN_RESOLUTIONS) {
-    for (const hasVideo of [false, true]) {
-      const key = hasVideo ? `${resolution}_video` : resolution
-      const usdPerM = Number(table[key])
-      if (!Number.isFinite(usdPerM) || usdPerM <= 0) continue
-      cells.push({ key, resolution, hasVideo, usdPerM })
-    }
+  for (const [key, raw] of Object.entries(table)) {
+    const cell = parseVideoTokenKey(key)
+    if (!cell) continue
+    const price = Number(raw)
+    if (!Number.isFinite(price) || price <= 0) continue
+    cells.push({ ...cell, price })
   }
   return cells
+}
+
+/** Variant columns present in the table, ordered least to most qualified. */
+export function getVideoTokenVariantColumns(
+  model: PricingModel
+): VideoTokenVariant[][] {
+  const seen = new Map<string, VideoTokenVariant[]>()
+  for (const cell of getVideoTokenCells(model)) {
+    seen.set(cell.variants.join('_'), cell.variants)
+  }
+  return [...seen.values()].sort((a, b) => a.length - b.length)
 }
 
 export function getVideoTokenPriceRange(
   model: PricingModel
 ): { min: number; max: number } | null {
-  const values = getVideoTokenCells(model).map((cell) => cell.usdPerM)
+  const values = getVideoTokenCells(model).map((cell) => cell.price)
   if (values.length === 0) return null
   return { min: Math.min(...values), max: Math.max(...values) }
 }
 
+/**
+ * Per-second prices are absolute: they must not be rescaled by the 1K/1M token
+ * unit selector the way per-1M-token prices are.
+ */
 export function formatVideoTokenUnitPrice(
-  usdPerM: number,
+  price: number,
+  unit: VideoTokenUnit,
   options: VideoTokenFormatOptions
 ): string {
-  return formatDynamicUnitPrice(usdPerM, options)
+  return formatDynamicUnitPrice(price, {
+    ...options,
+    tokenUnit: unit === 'per_second' ? 'M' : options.tokenUnit,
+  })
 }
 
 export function getVideoTokenCompactSummary(
   model: PricingModel,
   options: VideoTokenFormatOptions
-): { formatted: string; filled: number } | null {
+): { formatted: string; filled: number; unit: VideoTokenUnit } | null {
   const range = getVideoTokenPriceRange(model)
   if (!range) return null
+  const unit = getVideoTokenUnit(model)
   const filled = getVideoTokenCells(model).length
-  const min = formatVideoTokenUnitPrice(range.min, options)
-  const max = formatVideoTokenUnitPrice(range.max, options)
+  const min = formatVideoTokenUnitPrice(range.min, unit, options)
+  const max = formatVideoTokenUnitPrice(range.max, unit, options)
   return {
     formatted: range.min === range.max ? min : `${min} – ${max}`,
     filled,
+    unit,
   }
 }

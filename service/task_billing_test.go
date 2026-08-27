@@ -13,6 +13,7 @@ import (
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/model"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 	"github.com/QuantumNous/new-api/setting/ratio_setting"
 	"github.com/QuantumNous/new-api/types"
 	"github.com/glebarez/sqlite"
@@ -927,6 +928,39 @@ func TestRecalculateTaskQuotaByTokens_VideoTokenUsesSnapshotPrice(t *testing.T) 
 	require.NotNil(t, log)
 	assert.Equal(t, model.LogTypeRefund, log.Type)
 	assert.Equal(t, preConsumed-actualQuota, log.Quota)
+}
+
+// 按秒档位下单时已按「请求时长 × $/秒」定死金额，上游回报的 token 数是另一套口径。
+// 一旦这道闸被改坏，5 秒 720p 的任务会按二十多万 token 去乘 $/秒 单价重算，
+// 金额高出六个数量级并直接从用户余额里扣走。
+func TestRecalculateTaskQuotaByTokens_PerSecondSkipsTokenSettlement(t *testing.T) {
+	truncate(t)
+	ctx := context.Background()
+
+	const userID, tokenID, channelID = 22, 22, 22
+	const initQuota, tokenRemain = 5_000_000, 5_000_000
+	// 720p 5s @ $0.6/秒，group=1，QuotaPerUnit=500000 → 1500000
+	preConsumed, clamp := common.QuotaFromFloatChecked(5 * 0.6 * common.QuotaPerUnit)
+	require.Nil(t, clamp)
+
+	seedUser(t, userID, initQuota)
+	seedToken(t, tokenID, userID, "sk-video-second", tokenRemain)
+	seedChannel(t, channelID)
+	seedChargedAccounting(t, userID, channelID, tokenID, preConsumed, 1)
+
+	task := makeTask(userID, channelID, preConsumed, tokenID, BillingSourceWallet, 0)
+	task.PrivateData.BillingContext.BillingMode = billing_setting.BillingModeVideoToken
+	task.PrivateData.BillingContext.VideoTokenUnit = billing_setting.VideoTokenUnitSecond
+	task.PrivateData.BillingContext.VideoTokenSeconds = 5
+	task.PrivateData.BillingContext.VideoTokenPrice = 0.6
+	task.PrivateData.BillingContext.VideoTokenTier = "sec:720p"
+	task.PrivateData.BillingContext.GroupRatio = 1
+
+	RecalculateTaskQuotaByTokens(ctx, task, 243000)
+
+	assert.Equal(t, preConsumed, task.Quota)
+	assert.Equal(t, initQuota, getUserQuota(t, userID))
+	assert.Equal(t, int64(0), countLogs(t))
 }
 
 func TestRecalculate_Subscription_NegativeDelta(t *testing.T) {

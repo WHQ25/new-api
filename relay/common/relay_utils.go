@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -119,7 +120,65 @@ func createTaskError(err error, code string, statusCode int, localError bool) *d
 
 func storeTaskRequest(c *gin.Context, info *RelayInfo, action string, requestObj TaskSubmitReq) {
 	info.Action = action
+	requestObj.Metadata = CanonicalizeMetadataKeys(requestObj.Metadata)
 	c.Set("task_request", requestObj)
+}
+
+// CanonicalizeMetadataKeys lowercases every metadata key, at every nesting level,
+// so billing and the upstream request body read the same values.
+//
+// Adaptors hand the whole metadata map to encoding/json, which matches struct
+// tags case-insensitively at every level, while billing looks its dimensions up
+// by exact key. Without this, `{"DURATION": 10}` bills the 5-second default and
+// generates 10 seconds, `{"GENERATE_AUDIO": true}` bills the silent tier and
+// generates audio, and `{"content":[{"TYPE":"video_url",...}]}` bills the
+// text-to-video tier for a video-to-video request.
+//
+// Lowercasing nested keys is safe for every metadata field consumed today: the
+// nested containers that billing and the adaptors read are typed struct fields,
+// and a lowercased key still matches its tag. Values are never touched. A future
+// field whose nested keys are case-sensitive *data* (a passthrough
+// map[string]string rather than a struct) would need an exemption here.
+//
+// An exact lowercase key wins a collision, mirroring encoding/json's preference
+// for an exact tag match; remaining collisions resolve by sorted key so the same
+// request always produces the same charge.
+func CanonicalizeMetadataKeys(metadata map[string]any) map[string]any {
+	if len(metadata) == 0 {
+		return metadata
+	}
+	canonical := make(map[string]any, len(metadata))
+	var mixedCase []string
+	for key, value := range metadata {
+		if lowered := strings.ToLower(key); lowered == key {
+			canonical[key] = canonicalizeMetadataValue(value)
+		} else {
+			mixedCase = append(mixedCase, key)
+		}
+	}
+	sort.Strings(mixedCase)
+	for _, key := range mixedCase {
+		lowered := strings.ToLower(key)
+		if _, taken := canonical[lowered]; !taken {
+			canonical[lowered] = canonicalizeMetadataValue(metadata[key])
+		}
+	}
+	return canonical
+}
+
+func canonicalizeMetadataValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return CanonicalizeMetadataKeys(typed)
+	case []any:
+		canonical := make([]any, len(typed))
+		for i, item := range typed {
+			canonical[i] = canonicalizeMetadataValue(item)
+		}
+		return canonical
+	default:
+		return value
+	}
 }
 func GetTaskRequest(c *gin.Context) (TaskSubmitReq, error) {
 	v, exists := c.Get("task_request")
@@ -145,10 +204,33 @@ func validatePrompt(prompt string) *dto.TaskError {
 // overflow quota calculation into a negative charge.
 const MaxTaskDurationSeconds = 3600
 
-func validateTaskDurationBounds(req TaskSubmitReq) *dto.TaskError {
+// TaskValidationOption 调整通用校验对某个上游私有约定的容忍度。
+type TaskValidationOption func(*taskValidationConfig)
+
+type taskValidationConfig struct {
+	allowSelfSelectedDuration bool
+}
+
+// AllowSelfSelectedDuration 放行 duration = -1（由上游模型自选时长，见 DurationSelfSelect）。
+//
+// 只有真正实现了这个约定的上游能开。默认拒绝，是因为 -1 会一路原样级联下去：
+// 级联到下游 new-api 节点时，不认识它的适配器会按自己的默认时长预扣，
+// 而最终那个上游会按时长区间的上界生成，差额由运营方承担。
+func AllowSelfSelectedDuration() TaskValidationOption {
+	return func(cfg *taskValidationConfig) { cfg.allowSelfSelectedDuration = true }
+}
+
+func validateTaskDurationBounds(req TaskSubmitReq, opts ...TaskValidationOption) *dto.TaskError {
+	var cfg taskValidationConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	seconds := req.Duration
 	if seconds == 0 && req.Seconds != "" {
 		seconds, _ = strconv.Atoi(req.Seconds)
+	}
+	if cfg.allowSelfSelectedDuration && seconds == DurationSelfSelect {
+		return nil
 	}
 	if seconds < 0 || seconds > MaxTaskDurationSeconds {
 		return createTaskError(fmt.Errorf("seconds must be between 1 and %d", MaxTaskDurationSeconds), "invalid_seconds", http.StatusBadRequest, true)
@@ -280,7 +362,7 @@ func isKnownTaskField(field string) bool {
 	return knownFields[field]
 }
 
-func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *dto.TaskError {
+func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string, opts ...TaskValidationOption) *dto.TaskError {
 	var err error
 	contentType := c.GetHeader("Content-Type")
 	var req TaskSubmitReq
@@ -299,7 +381,7 @@ func ValidateBasicTaskRequest(c *gin.Context, info *RelayInfo, action string) *d
 		return taskErr
 	}
 
-	if taskErr := validateTaskDurationBounds(req); taskErr != nil {
+	if taskErr := validateTaskDurationBounds(req, opts...); taskErr != nil {
 		return taskErr
 	}
 

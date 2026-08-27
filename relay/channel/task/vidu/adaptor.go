@@ -230,7 +230,6 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 		Model:             taskcommon.DefaultString(info.UpstreamModelName, "viduq1"),
 		Images:            req.Images,
 		Prompt:            req.Prompt,
-		Duration:          taskcommon.DefaultInt(req.Duration, 5),
 		Resolution:        taskcommon.DefaultString(req.Size, "1080p"),
 		MovementAmplitude: "auto",
 		Bgm:               false,
@@ -238,6 +237,9 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 	if err := taskcommon.UnmarshalMetadata(req.Metadata, &r); err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
 	}
+	// 时长必须与计费同源，且只能在反序列化之后定值：metadata 会整体覆盖请求体，
+	// duration=5 配 metadata.duration=10 的请求否则会按 5 秒收费、按 10 秒生成。
+	r.Duration = taskcommon.DefaultInt(req.RequestedOutputSeconds(), 5)
 	return &r, nil
 }
 

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/QuantumNous/new-api/common"
@@ -17,6 +19,7 @@ import (
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 	"github.com/QuantumNous/new-api/relaykit/dto"
 	"github.com/QuantumNous/new-api/service"
+	"github.com/QuantumNous/new-api/setting/billing_setting"
 
 	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
@@ -124,7 +127,237 @@ func (a *TaskAdaptor) Init(info *relaycommon.RelayInfo) {
 // ValidateRequestAndSetAction parses body, validates fields and sets default action.
 func (a *TaskAdaptor) ValidateRequestAndSetAction(c *gin.Context, info *relaycommon.RelayInfo) (taskErr *taskdto.TaskError) {
 	// Accept only POST /v1/video/generations as "generate" action.
-	return relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate)
+	// 方舟允许 duration = -1（由模型自选时长），通用校验默认拒绝这个上游私有约定。
+	if taskErr = relaycommon.ValidateBasicTaskRequest(c, info, constant.TaskActionGenerate, relaycommon.AllowSelfSelectedDuration()); taskErr != nil {
+		return taskErr
+	}
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return service.TaskErrorWrapperLocal(err, "get_task_request_failed", http.StatusBadRequest)
+	}
+	// 别名对齐必须在计价之前跑，也必须在这里而不是 ResolveVideoBilling 里：它改的是
+	// 下发内容，按次价等其它计费方式下同样要生效。Metadata 非空时是 map，就地改写
+	// 对 context 里的同一份请求生效。
+	alignAudioAlias(req.Metadata)
+	return nil
+}
+
+// alignAudioAlias 把统一协议的 audio 别名对齐到方舟原生的 generate_audio。
+// 请求体只下发 generate_audio，只写 audio: false 会变成上游按官方默认值生成有声视频、
+// 计费却读到无声档。两者冲突时以原生键为准——上游听的就是它。
+func alignAudioAlias(metadata map[string]interface{}) {
+	preference, found := audioPreference(metadata)
+	if !found {
+		return
+	}
+	metadata["generate_audio"] = preference
+	metadata["audio"] = preference
+}
+
+// audioPreference 读出客户端有没有明确要不要声音。原生的 generate_audio 优先于统一协议的
+// audio 别名：只有前者会下发给上游。
+func audioPreference(metadata map[string]interface{}) (bool, bool) {
+	for _, key := range []string{"generate_audio", "audio"} {
+		raw, ok := relaycommon.MetadataValue(metadata, key)
+		if !ok {
+			continue
+		}
+		switch value := raw.(type) {
+		case bool:
+			return value, true
+		case string:
+			parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+			if err != nil {
+				continue
+			}
+			return parsed, true
+		}
+	}
+	return false, false
+}
+
+// ResolveVideoBilling 让计费读到方舟实际会生成的时长与音频档，见 channel.VideoBillingResolver。
+func (a *TaskAdaptor) ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (float64, *taskdto.TaskError) {
+	req, err := relaycommon.GetTaskRequest(c)
+	if err != nil {
+		return 0, service.TaskErrorWrapperLocal(err, "get_task_request_failed", http.StatusBadRequest)
+	}
+	limit, known := videoContractFor(info)
+
+	changed, taskErr := pinGenerateAudio(&req, limit, known, info.OriginModelName)
+	if taskErr != nil {
+		return 0, taskErr
+	}
+	if changed {
+		// Metadata 可能是这里新分配的，就地改写不够，必须把请求整体写回。
+		c.Set("task_request", req)
+	}
+
+	frames, taskErr := requestedFrames(req, limit, known)
+	if taskErr != nil {
+		return 0, taskErr
+	}
+	intent, taskErr := requestedDuration(req)
+	if taskErr != nil {
+		return 0, taskErr
+	}
+
+	// frames 的优先级高于 duration，且不一定整除帧率：289 帧是 12.0417 秒，
+	// 取整成 13 秒会凭空多收 8%。官方给的换算就是 frames/24，按精确值计费。
+	if frames > 0 {
+		return float64(frames) / videoFramesPerSecond, nil
+	}
+
+	switch {
+	case intent.selfSelect:
+		// duration=-1 表示由模型在取值区间内自选时长，下单时无从得知具体秒数。
+		// 按区间上界预扣，差额靠上游回报的 usage 结算退回；按通用的 5 秒预扣，
+		// Seedance 2.5 最多会少收到六分之一。
+		if !known || !limit.supportsSelfSelect {
+			return 0, service.TaskErrorWrapperLocal(
+				fmt.Errorf("duration = %d (model-selected duration) is not supported by this model", relaycommon.DurationSelfSelect),
+				"invalid_seconds", http.StatusBadRequest)
+		}
+		return float64(limit.maxSeconds), nil
+
+	case intent.seconds > 0:
+		// 区间外的时长在这里拦下。通用校验只拦到 3600 秒，Seedance 2.0 请求
+		// duration=3600 会先按 3600 秒预扣，再等上游拒绝退款。
+		if known && (intent.seconds < limit.minSeconds || intent.seconds > limit.maxSeconds) {
+			return 0, service.TaskErrorWrapperLocal(
+				fmt.Errorf("duration must be between %d and %d seconds for this model", limit.minSeconds, limit.maxSeconds),
+				"invalid_seconds", http.StatusBadRequest)
+		}
+		return 0, nil
+
+	default:
+		// 没给时长就只能按上游的默认值计费，而认不出模型时那个默认值无从得知。
+		// 按通用的 5 秒猜，绑着 Seedance 2.5 的接入点会自选到 30 秒，少收五分之六。
+		if !known {
+			return 0, service.TaskErrorWrapperLocal(
+				fmt.Errorf("duration is required for this model: the upstream model behind it cannot be identified, so its default duration is unknown"),
+				"invalid_seconds", http.StatusBadRequest)
+		}
+		// 官方默认值就是 -1 的代次，客户端什么都不传就等同于自选。
+		if limit.selfSelectByDefault {
+			return float64(limit.maxSeconds), nil
+		}
+		return 0, nil
+	}
+}
+
+// videoContractFor 返回判断上游契约时该用的那一档，第二个返回值表示是否认出了模型。
+//
+// 渠道的模型映射可能把请求改投到另一档 Seedance，时长区间、frames 支持和音频默认值
+// 都跟着变，只看客户端请求的模型名会按错的一档计费。只有上游模型名是 endpoint ID
+// （方舟允许拿它当模型名，里面不含型号信息）时才退回客户端请求的模型名——
+// 上游是另一个认不出的名字时不套任何契约，按一个猜的上界预扣比少收更糟。
+func videoContractFor(info *relaycommon.RelayInfo) (videoDurationLimit, bool) {
+	upstream := info.UpstreamModelName
+	if limit, known := videoDurationLimitFor(upstream); known {
+		return limit, true
+	}
+	if upstream == "" || upstream == info.OriginModelName || strings.HasPrefix(strings.ToLower(upstream), arkEndpointIDPrefix) {
+		return videoDurationLimitFor(info.OriginModelName)
+	}
+	return videoDurationLimit{}, false
+}
+
+// pinGenerateAudio 把上游的隐式音频默认值写成显式值，返回请求是否被改动。
+//
+// 方舟的 generate_audio 官方默认值就是 true：客户端什么都不传，上游也会生成有声视频。
+// 而计费只在请求带了这个信号时才进 _audio 档——Seedance 1.5 pro 有声 16 元、无声 8 元，
+// 不写死就是「不传参数」这一最常见的情况下少收一半。
+//
+// 认不出模型时没有一个普适的默认值可写：接入点背后可能是默认有声的 1.5，也可能是
+// 根本不认识 generate_audio 的 1.0——凭空注入这个字段会让后者直接被上游拒绝。
+// 此时看价目表：没配 _audio 档就不改写（那个维度本来就不参与计价，查表时会被变体
+// 交集去掉），配了就必须让调用方自己说清楚，否则上游语义和计费档位保不住其中一个。
+func pinGenerateAudio(req *relaycommon.TaskSubmitReq, limit videoDurationLimit, known bool, model string) (bool, *taskdto.TaskError) {
+	if _, found := audioPreference(req.Metadata); found {
+		return false, nil
+	}
+	if !known {
+		if !lo.Contains(billing_setting.VideoTokenPricedVariants(model), billing_setting.VideoTokenVariantAudio) {
+			return false, nil
+		}
+		return false, service.TaskErrorWrapperLocal(
+			fmt.Errorf("generate_audio is required for this model: the upstream model behind it cannot be identified, so its audio default is unknown"),
+			"invalid_request", http.StatusBadRequest)
+	}
+	if !limit.generatesAudioByDefault {
+		return false, nil
+	}
+	if req.Metadata == nil {
+		req.Metadata = map[string]interface{}{}
+	}
+	req.Metadata["generate_audio"] = true
+	req.Metadata["audio"] = true
+	return true, nil
+}
+
+// requestedFrames 读出并校验 frames。官方规定 frames ∈ [29, 289] 且 frames = 25 + 4n，
+// 只有 Seedance 1.0 pro / 1.0 pro fast 支持。
+//
+// frames 是计费乘数，越界值不能原样丢给上游去 400：预扣会先按那个数字扣走额度。
+// 认不出模型时也拒绝——不知道这个上游认不认 frames，按它预扣等于凭空定一个乘数。
+func requestedFrames(req relaycommon.TaskSubmitReq, limit videoDurationLimit, known bool) (int, *taskdto.TaskError) {
+	raw, ok := relaycommon.MetadataValue(req.Metadata, "frames")
+	if !ok || raw == nil {
+		return 0, nil
+	}
+	if !known || !limit.supportsFrames {
+		return 0, service.TaskErrorWrapperLocal(
+			fmt.Errorf("frames is not supported by this model, use duration instead"),
+			"invalid_frames", http.StatusBadRequest)
+	}
+	// 必须严格取整：BoundedIntFromAny 会把 29.9 截成合法的 29 帧收下，
+	// 预扣之后请求体才因为类型不符失败。
+	frames, ok := relaycommon.StrictIntFromAny(raw)
+	if !ok || frames < videoFramesMin || frames > videoFramesMax || (frames-videoFramesBase)%videoFramesStep != 0 {
+		return 0, service.TaskErrorWrapperLocal(
+			fmt.Errorf("frames must be an integer between %d and %d satisfying frames = %d + %d*n", videoFramesMin, videoFramesMax, videoFramesBase, videoFramesStep),
+			"invalid_frames", http.StatusBadRequest)
+	}
+	return frames, nil
+}
+
+// durationIntent 是这次请求对时长的表达：显式秒数、由模型自选、或者什么都没给。
+type durationIntent struct {
+	seconds    int
+	selfSelect bool
+}
+
+// requestedDuration 解析最终会生效的时长意图。取值顺序与 RequestedOutputSeconds 一致
+// （顶层压 metadata），但取整是严格的，并且区分「没给」与「给了个非法值」：
+// 通用校验只看顶层字段，metadata 里的时长同样会被反序列化进上游请求体，
+// 按「解析后为 0」当没给，就成了「按默认值收费、让上游拿一个非法值去生成」。
+func requestedDuration(req relaycommon.TaskSubmitReq) (durationIntent, *taskdto.TaskError) {
+	if req.Duration != 0 || req.Seconds != "" {
+		// 顶层字段已由通用校验兜住范围与哨兵，这里只需读出来。
+		if req.RequestsSelfSelectedDuration() {
+			return durationIntent{selfSelect: true}, nil
+		}
+		return durationIntent{seconds: req.RequestedOutputSeconds()}, nil
+	}
+	for _, key := range []string{"duration", "seconds"} {
+		raw, ok := relaycommon.MetadataValue(req.Metadata, key)
+		if !ok || raw == nil {
+			continue
+		}
+		seconds, ok := relaycommon.StrictIntFromAny(raw)
+		switch {
+		case ok && seconds == relaycommon.DurationSelfSelect:
+			return durationIntent{selfSelect: true}, nil
+		case ok && seconds > 0 && seconds <= relaycommon.MaxTaskDurationSeconds:
+			return durationIntent{seconds: seconds}, nil
+		default:
+			return durationIntent{}, service.TaskErrorWrapperLocal(
+				fmt.Errorf("%s must be an integer between 1 and %d, or %d for a model-selected duration", key, relaycommon.MaxTaskDurationSeconds, relaycommon.DurationSelfSelect),
+				"invalid_seconds", http.StatusBadRequest)
+		}
+	}
+	return durationIntent{}, nil
 }
 
 // BuildRequestURL constructs the upstream URL.
@@ -147,7 +380,7 @@ func (a *TaskAdaptor) EstimateBilling(c *gin.Context, info *relaycommon.RelayInf
 		return nil
 	}
 	hasVideo := hasVideoInMetadata(req.Metadata)
-	resolution, _ := req.Metadata["resolution"].(string)
+	resolution := req.RequestedResolution()
 	ratio, ok := GetVideoInputRatio(info.OriginModelName, resolution, hasVideo)
 	if !ok || ratio == 1.0 {
 		return nil
@@ -301,8 +534,29 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, na
 
 	// 时长与计费估算同源：顶层 duration/seconds 优先于 metadata，未显式请求时不下发，
 	// 交给上游用它自己的默认值。
-	if sec := req.RequestedOutputSeconds(); sec > 0 {
-		r.Duration = lo.ToPtr(dto.IntValue(sec))
+	switch {
+	case r.Frames != nil:
+		// frames 在场时不下发 duration：官方规定 frames 优先，同时给两个字段只会让
+		// 「下发的」和「计费的」各自解释一遍。必须显式清空——metadata 会整体反序列化
+		// 进请求体，metadata 里的 duration 已经落在 r.Duration 上了。
+		r.Duration = nil
+	case req.RequestsSelfSelectedDuration():
+		// -1 必须显式下发。计费已按该模型时长区间的上界预扣，这里漏发就变成
+		// 「按上界收费、按上游默认时长生成」。
+		r.Duration = lo.ToPtr(dto.IntValue(relaycommon.DurationSelfSelect))
+	default:
+		if sec := req.RequestedOutputSeconds(); sec > 0 {
+			r.Duration = lo.ToPtr(dto.IntValue(sec))
+		}
+	}
+	// 分辨率与宽高比同理：统一协议入站的调用方只会给顶层 size，方舟只认 resolution/ratio。
+	// 不在这里换算，metadata 里没有 resolution 的请求就会按 size 计费、却让方舟用它自己的
+	// 默认分辨率生成。取值走与计费估算相同的入口，两边不可能算出不同的档位。
+	if resolution := req.RequestedResolution(); resolution != "" {
+		r.Resolution = resolution
+	}
+	if ratio := req.RequestedAspectRatio(); ratio != "" {
+		r.Ratio = ratio
 	}
 
 	// 方舟官方协议入站时 content 已是上游原生数组，官方契约保证按数组顺序处理并保留

@@ -54,3 +54,72 @@ func GetVideoInputRatio(modelName, resolution string, hasVideo bool) (float64, b
 	}
 	return price / base, true
 }
+
+// videoDurationLimit 描述某一档 Seedance 的时长与音频契约。
+// 来源：https://docs.volcengine.com/docs/82379/1520757
+type videoDurationLimit struct {
+	// minSeconds / maxSeconds 是 duration 取值区间。区间外的显式时长要在这里 400：
+	// 通用校验只拦 3600 秒，Seedance 2.0 请求 duration=3600 会先按 3600 秒预扣，
+	// 再等上游拒绝退款。duration=-1（模型自选时长）按 maxSeconds 预扣，
+	// 再靠上游回报的 usage 做差额结算退回。
+	minSeconds int
+	maxSeconds int
+	// supportsSelfSelect 表示该档接受 duration = -1。不能用 maxSeconds > 0 代替：
+	// 每一档都有时长上界，但只有 1.5 及以后的代次允许模型自选。
+	supportsSelfSelect bool
+	// selfSelectByDefault 表示不传 duration 时也由模型自选时长（即官方默认值为 -1）。
+	selfSelectByDefault bool
+	// supportsFrames 表示该档支持用 frames 指定帧数，且优先级高于 duration。
+	supportsFrames bool
+	// generatesAudioByDefault 表示 generate_audio 的官方默认值为 true，
+	// 即客户端什么都不传，上游也会生成有声视频。
+	generatesAudioByDefault bool
+}
+
+// videoDurationLimits 按从新到旧、从具体到笼统列出各档 Seedance，逐条子串匹配。
+// 用切片而不是 map，是因为匹配靠子串包含，map 的迭代顺序随机会让「同时匹配两条」的
+// 模型名每次落到不同的档；顺序也因此有意义——seedance10pro 必须排在 seedance10 前面，
+// 否则 1.0 lite 会跟着 1.0 pro 一起被放行 frames。
+var videoDurationLimits = []struct {
+	generation string
+	limit      videoDurationLimit
+}{
+	{"seedance25", videoDurationLimit{minSeconds: 4, maxSeconds: 30, supportsSelfSelect: true, selfSelectByDefault: true, generatesAudioByDefault: true}},
+	{"seedance20", videoDurationLimit{minSeconds: 4, maxSeconds: 15, supportsSelfSelect: true, generatesAudioByDefault: true}},
+	{"seedance15", videoDurationLimit{minSeconds: 4, maxSeconds: 12, supportsSelfSelect: true, generatesAudioByDefault: true}},
+	// frames 只有 Seedance 1.0 pro / 1.0 pro fast 支持，1.0 lite 不支持。
+	{"seedance10pro", videoDurationLimit{minSeconds: 2, maxSeconds: 12, supportsFrames: true}},
+	{"seedance10", videoDurationLimit{minSeconds: 2, maxSeconds: 12}},
+}
+
+// videoDurationLimitFor 取模型所属代次的时长契约，第二个返回值表示是否认出了代次。
+func videoDurationLimitFor(modelName string) (videoDurationLimit, bool) {
+	compact := strings.Map(func(r rune) rune {
+		if r == '-' || r == '_' || r == '.' || r == ' ' {
+			return -1
+		}
+		return r
+	}, strings.ToLower(modelName))
+	for _, entry := range videoDurationLimits {
+		if strings.Contains(compact, entry.generation) {
+			return entry.limit, true
+		}
+	}
+	return videoDurationLimit{}, false
+}
+
+// 官方 frames 契约：取值区间 [29, 289]，且必须满足 frames = 25 + 4n，
+// 换算出的时长为 frames/24 秒（1.2083 ~ 12.0417 秒）。
+// 来源：https://docs.volcengine.com/docs/82379/1520757
+// arkEndpointIDPrefix 是方舟推理接入点 ID 的前缀。它可以直接当模型名用，
+// 但串里不含型号信息，认不出该套哪一档契约。
+const arkEndpointIDPrefix = "ep-"
+
+const (
+	// videoFramesPerSecond 是方舟视频的固定帧率，frames 与时长按它换算。
+	videoFramesPerSecond = 24
+	videoFramesMin       = 29
+	videoFramesMax       = 289
+	videoFramesBase      = 25
+	videoFramesStep      = 4
+)

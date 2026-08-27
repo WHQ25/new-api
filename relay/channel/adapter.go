@@ -32,6 +32,21 @@ type Adaptor interface {
 	ConvertGeminiRequest(c *gin.Context, info *relaycommon.RelayInfo, request *dto.GeminiChatRequest) (any, error)
 }
 
+// VideoBillingResolver 由「计费维度不能只按统一协议的字面值推断」的上游实现。
+// 在模型映射完成之后、计价开始之前调用，因此拿得到最终会请求的上游模型。
+// 实现可以就地补齐上游的隐式默认值（方舟不传 generate_audio 就生成有声视频，
+// 不补齐就会按无声档收费、按有声档生成），并返回上游实际会生成的时长：
+//   - 海螺不指定时长时生成 6 秒、Sora 生成 4 秒，按通用的 5 秒估算会少收 1/6、多收 25%；
+//   - 方舟的 frames 优先级高于 duration，且 duration = -1 表示由模型自选时长。
+//
+// 返回秒数为 0 表示按通用规则计费（取客户端请求的时长，未指定时用通用默认值）。
+// 秒数用 float64 是因为帧数不一定整除帧率：289 帧就是 12.0417 秒，取整成 13 秒会多收 8%。
+// 返回错误表示请求违反了该上游的契约，直接终止并返回给客户端——计费乘数的边界校验
+// 属于上游自己的职责，不能推给上游服务去 400。
+type VideoBillingResolver interface {
+	ResolveVideoBilling(c *gin.Context, info *relaycommon.RelayInfo) (float64, *taskdto.TaskError)
+}
+
 type TaskAdaptor interface {
 	Init(info *relaycommon.RelayInfo)
 

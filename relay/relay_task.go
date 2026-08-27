@@ -183,7 +183,16 @@ func RelayTaskSubmit(c *gin.Context, info *relaycommon.RelayInfo) (*TaskSubmitRe
 	info.OriginModelName = modelName
 	videoTokenBilling := billing_setting.IsVideoTokenBilling(modelName)
 	if videoTokenBilling {
-		priceData, priceErr := helper.ModelPriceHelperVideoToken(c, info)
+		// 计费假定的秒数必须与上游实际生成的秒数一致，见 channel.VideoBillingResolver。
+		// 必须在模型映射之后跑：上游的时长/音频默认值是按最终请求的那个模型定的。
+		billableSeconds := float64(0)
+		if resolver, ok := adaptor.(channel.VideoBillingResolver); ok {
+			var resolveErr *dto.TaskError
+			if billableSeconds, resolveErr = resolver.ResolveVideoBilling(c, info); resolveErr != nil {
+				return nil, resolveErr
+			}
+		}
+		priceData, priceErr := helper.ModelPriceHelperVideoToken(c, info, billableSeconds)
 		if priceErr != nil {
 			code := "video_token_price_error"
 			if errors.Is(priceErr, billing_setting.ErrVideoTokenResolutionRequired) {

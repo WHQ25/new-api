@@ -714,10 +714,11 @@ export const ModelPricingEditorPanel = forwardRef<
                         <FieldLabel>{t('Video tiers')}</FieldLabel>
                         <FieldDescription>
                           {t(
-                            'USD price per 1M tokens for each resolution and input type.'
+                            'USD price for each resolution and variant. Pick the billing unit the provider publishes: per 1M tokens (Seedance) or per second (Kling, Wan, Vidu).'
                           )}
                         </FieldDescription>
                         <VideoTokenPriceGrid
+                          key={editorReloadToken}
                           value={videoTokenPrice}
                           onChange={setVideoTokenPrice}
                         />

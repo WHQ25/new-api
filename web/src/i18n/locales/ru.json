@@ -3358,7 +3358,6 @@
     "per": "за",
     "Per 1K tokens": "За 1K токенов",
     "Per 1M tokens": "За 1M токенов",
-    "Per 1M tokens, split by resolution and whether the request includes video input.": "За 1 млн токенов, в зависимости от разрешения и наличия видеовхода.",
     "per request": "за запрос",
     "Per request": "За запрос",
     "Per Request": "За запрос",
@@ -4969,7 +4968,6 @@
     "USD": "USD",
     "USD Exchange Rate": "Обменный курс USD",
     "USD price per 1M input tokens.": "Цена в USD за 1 млн входных токенов.",
-    "USD price per 1M tokens for each resolution and input type.": "Цена в USD за 1 млн токенов для каждого разрешения и типа входа.",
     "USD price per 1M tokens.": "Цена в USD за 1 млн токенов.",
     "Use +: to add a group, -: to remove a default selectable group, or no prefix to append a group.": "Используйте +: для добавления группы, -: для удаления выбираемой по умолчанию группы, без префикса — для добавления в конец.",
     "Use a compatible browser or device with biometric authentication or a security key to register a Passkey.": "Используйте совместимый браузер или устройство с биометрической аутентификацией или ключ безопасности для регистрации ключа доступа.",
@@ -5290,6 +5288,15 @@
     "Zero retention": "Без хранения данных",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "With audio": "Со звуком",
+    "With voice": "С голосом",
+    "Billed duration": "Оплачиваемая длительность",
+    "Per second": "За секунду",
+    "Billing unit": "Единица тарификации",
+    "Base": "База",
+    "Per second of generated video, split by resolution and variant.": "За секунду сгенерированного видео, с разбивкой по разрешению и варианту.",
+    "Per 1M tokens, split by resolution and variant.": "За 1 млн токенов, с разбивкой по разрешению и варианту.",
+    "USD price for each resolution and variant. Pick the billing unit the provider publishes: per 1M tokens (Seedance) or per second (Kling, Wan, Vidu).": "Цена в USD для каждого разрешения и варианта. Выберите единицу тарификации, публикуемую провайдером: за 1 млн токенов (Seedance) или за секунду (Kling, Wan, Vidu)."
   }
 }

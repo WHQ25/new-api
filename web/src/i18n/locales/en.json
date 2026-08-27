@@ -3358,7 +3358,6 @@
     "per": "per",
     "Per 1K tokens": "Per 1K tokens",
     "Per 1M tokens": "Per 1M tokens",
-    "Per 1M tokens, split by resolution and whether the request includes video input.": "Per 1M tokens, split by resolution and whether the request includes video input.",
     "per request": "per request",
     "Per request": "Per request",
     "Per Request": "Per Request",
@@ -4969,7 +4968,6 @@
     "USD": "USD",
     "USD Exchange Rate": "USD Exchange Rate",
     "USD price per 1M input tokens.": "USD price per 1M input tokens.",
-    "USD price per 1M tokens for each resolution and input type.": "USD price per 1M tokens for each resolution and input type.",
     "USD price per 1M tokens.": "USD price per 1M tokens.",
     "Use +: to add a group, -: to remove a default selectable group, or no prefix to append a group.": "Use +: to add a group, -: to remove a default selectable group, or no prefix to append a group.",
     "Use a compatible browser or device with biometric authentication or a security key to register a Passkey.": "Use a compatible browser or device with biometric authentication or a security key to register a Passkey.",
@@ -5290,6 +5288,15 @@
     "Zero retention": "Zero retention",
     "Zhipu": "Zhipu",
     "Zhipu V4": "Zhipu V4",
-    "Zoom": "Zoom"
+    "Zoom": "Zoom",
+    "With audio": "With audio",
+    "With voice": "With voice",
+    "Billed duration": "Billed duration",
+    "Per second": "Per second",
+    "Billing unit": "Billing unit",
+    "Base": "Base",
+    "Per second of generated video, split by resolution and variant.": "Per second of generated video, split by resolution and variant.",
+    "Per 1M tokens, split by resolution and variant.": "Per 1M tokens, split by resolution and variant.",
+    "USD price for each resolution and variant. Pick the billing unit the provider publishes: per 1M tokens (Seedance) or per second (Kling, Wan, Vidu).": "USD price for each resolution and variant. Pick the billing unit the provider publishes: per 1M tokens (Seedance) or per second (Kling, Wan, Vidu)."
   }
 }

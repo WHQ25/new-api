@@ -3358,7 +3358,6 @@
     "per": "每",
     "Per 1K tokens": "每 1K tokens",
     "Per 1M tokens": "每 1M tokens",
-    "Per 1M tokens, split by resolution and whether the request includes video input.": "每百萬 token 計價，依解析度與是否含影片輸入分檔。",
     "per request": "每次請求",
     "Per request": "每次請求",
     "Per Request": "按次計費",
@@ -4969,7 +4968,6 @@
     "USD": "USD",
     "USD Exchange Rate": "美元匯率",
     "USD price per 1M input tokens.": "每 100 萬輸入 token 的美元價格。",
-    "USD price per 1M tokens for each resolution and input type.": "依解析度與是否含影片輸入分別填寫每百萬 token 的美元單價。",
     "USD price per 1M tokens.": "每 100 萬 token 的美元價格。",
     "Use +: to add a group, -: to remove a default selectable group, or no prefix to append a group.": "使用 +: 新增分組，使用 -: 移除預設可選分組，不加前綴則追加分組。",
     "Use a compatible browser or device with biometric authentication or a security key to register a Passkey.": "請使用支援生物識別認證或安全金鑰的兼容瀏覽器或設備來註冊通行金鑰。",
@@ -5290,6 +5288,15 @@
     "Zero retention": "零數據保留",
     "Zhipu": "智譜",
     "Zhipu V4": "智譜 V4",
-    "Zoom": "縮放"
+    "Zoom": "縮放",
+    "With audio": "含音訊",
+    "With voice": "指定音色",
+    "Billed duration": "計費時長",
+    "Per second": "按秒",
+    "Billing unit": "計費單位",
+    "Base": "基礎檔",
+    "Per second of generated video, split by resolution and variant.": "按產生影片的秒數計費，依解析度與變體分檔。",
+    "Per 1M tokens, split by resolution and variant.": "按每百萬 token 計費，依解析度與變體分檔。",
+    "USD price for each resolution and variant. Pick the billing unit the provider publishes: per 1M tokens (Seedance) or per second (Kling, Wan, Vidu).": "為每個解析度與變體填寫美元單價。計費單位依上游公布的口徑選擇：每百萬 token（Seedance）或每秒（可靈、萬相、Vidu）。"
   }
 }
