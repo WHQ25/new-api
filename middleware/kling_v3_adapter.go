@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/QuantumNous/new-api/common"
+	"github.com/QuantumNous/new-api/constant"
 	relaycommon "github.com/QuantumNous/new-api/relay/common"
 
 	"github.com/gin-gonic/gin"
@@ -92,6 +93,7 @@ func KlingV3RequestConvert() gin.HandlerFunc {
 			writer.flush(c.Request.Method)
 		}()
 
+		common.SetContextKey(c, constant.ContextKeyInboundRequestPath, c.Request.URL.Path)
 		if rewriteKlingV3Request(c) {
 			c.Next()
 		}

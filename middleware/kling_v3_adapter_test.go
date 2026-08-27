@@ -241,3 +241,47 @@ func TestKlingV3OutputSatisfiesUnifiedContract(t *testing.T) {
 	require.Len(t, req.MediaItems(), 1)
 	assert.Equal(t, relaycommon.TaskMediaRoleFirstFrame, req.MediaItems()[0].Role)
 }
+
+// 入站兼容层把 URL.Path 改写成了内部统一路径，日志若照抄改写后的值，事后就分不出
+// 一笔请求走的是哪套对外协议。两套官方协议的入站层都要在改写前留下原始路径。
+func TestInboundRequestPathSurvivesRewrite(t *testing.T) {
+	cases := []struct {
+		name    string
+		convert gin.HandlerFunc
+		method  string
+		route   string
+		target  string
+		body    string
+		resp    string
+	}{
+		{"kling submit", KlingV3RequestConvert(), http.MethodPost, KlingV3TextToVideoPath,
+			KlingV3TextToVideoPath, `{"prompt":"a cat"}`,
+			`{"id":"task-1","object":"video","status":"queued","created_at":1787842125}`},
+		{"kling fetch", KlingV3RequestConvert(), http.MethodGet, KlingV3TasksPath,
+			KlingV3TasksPath + "?task_ids=task-1", "",
+			`{"code":"success","data":{"task_id":"task-1","status":"SUCCESS","submit_time":1787842125}}`},
+		{"ark submit", ArkRequestConvert(), http.MethodPost, ArkVideoTaskPath, ArkVideoTaskPath,
+			`{"model":"doubao-seedance-1-0-pro-250528","content":[{"type":"text","text":"a cat"}]}`,
+			`{"id":"task-1","object":"video","status":"queued","created_at":1787842125}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gin.SetMode(gin.TestMode)
+			router := gin.New()
+			var logged, rewritten string
+			router.Handle(tc.method, tc.route, tc.convert, func(c *gin.Context) {
+				logged = common.InboundRequestPath(c)
+				rewritten = c.Request.URL.Path
+				c.Data(http.StatusOK, "application/json", []byte(tc.resp))
+			})
+
+			req := httptest.NewRequest(tc.method, tc.target, strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			router.ServeHTTP(httptest.NewRecorder(), req)
+
+			require.NotEmpty(t, rewritten, "the inner handler never ran")
+			assert.Equal(t, tc.route, logged, "logged path must stay the caller-facing one")
+			assert.NotEqual(t, tc.route, rewritten, "relay still has to see the internal path")
+		})
+	}
+}

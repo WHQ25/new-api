@@ -9,6 +9,9 @@ const (
 
 	ContextKeyOriginalModel    ContextKey = "original_model"
 	ContextKeyRequestStartTime ContextKey = "request_start_time"
+	// 入站兼容层改写 c.Request.URL.Path 之前记下的原始路径，供日志还原调用方
+	// 实际打的是哪套对外协议。
+	ContextKeyInboundRequestPath ContextKey = "inbound_request_path"
 
 	/* token related keys */
 	ContextKeyTokenUnlimited         ContextKey = "token_unlimited_quota"

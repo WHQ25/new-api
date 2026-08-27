@@ -40,7 +40,7 @@ func LogTaskConsumption(c *gin.Context, info *relaycommon.RelayInfo) {
 	}
 	other := make(map[string]interface{})
 	other["is_task"] = true
-	other["request_path"] = c.Request.URL.Path
+	other["request_path"] = common.InboundRequestPath(c)
 	// video_token 模式下 ModelPrice 存的是档位 $/1M tokens，不是按次单价；
 	// 写进 model_price 会让日志详情把它渲染成「单次调用收费」。
 	if info.PriceData.BillingMode != billing_setting.BillingModeVideoToken {

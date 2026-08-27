@@ -175,6 +175,22 @@ func SetContextKey(c *gin.Context, key constant.ContextKey, value any) {
 	c.Set(string(key), value)
 }
 
+// InboundRequestPath 返回调用方实际打进来的请求路径。入站兼容层（方舟、可灵 3.0）
+// 会把 c.Request.URL.Path 改写成内部统一路径，日志若照抄改写后的值，事后就分不出
+// 一笔请求走的是哪套对外协议。中间件在改写前把原始路径存进 context，这里优先读它。
+func InboundRequestPath(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	if path := GetContextKeyString(c, constant.ContextKeyInboundRequestPath); path != "" {
+		return path
+	}
+	if c.Request != nil && c.Request.URL != nil {
+		return c.Request.URL.Path
+	}
+	return ""
+}
+
 func GetContextKey(c *gin.Context, key constant.ContextKey) (any, bool) {
 	return c.Get(string(key))
 }

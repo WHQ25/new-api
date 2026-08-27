@@ -54,6 +54,7 @@ func ArkRequestConvert() gin.HandlerFunc {
 			writer.flush(c.Request.Method)
 		}()
 
+		common.SetContextKey(c, constant.ContextKeyInboundRequestPath, c.Request.URL.Path)
 		if rewriteArkRequest(c) {
 			c.Next()
 		}
