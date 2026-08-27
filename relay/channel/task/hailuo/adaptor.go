@@ -169,8 +169,13 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 		Prompt:     req.Prompt,
 		Resolution: resolution,
 	}
-	if err := req.UnmarshalMetadata(&videoRequest); err != nil {
+	if err := taskcommon.UnmarshalMetadata(req.Metadata, videoRequest); err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata to video request failed")
+	}
+	// 模型必须与计费同源：metadata 会整体覆盖请求体，model=MiniMax-Hailuo-02 配
+	// metadata.model=MiniMax-Hailuo-2.3 的请求否则会按前者收费、按后者生成。
+	if err := taskcommon.AssertBilledModel(info.UpstreamModelName, videoRequest.Model); err != nil {
+		return nil, err
 	}
 	// 时长必须与计费同源，且只能在反序列化之后定值：metadata 会整体覆盖请求体，
 	// duration=5 配 metadata.duration=10 的请求否则会按 5 秒收费、按 10 秒生成。

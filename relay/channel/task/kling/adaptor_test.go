@@ -61,3 +61,40 @@ func TestConvertToRequestPayloadPinsBilledDuration(t *testing.T) {
 		})
 	}
 }
+
+// 下发给上游的模型必须与计费依据一致。可灵上游认的是 model_name，而 UnmarshalMetadata
+// 只删 metadata 里的 model——删掉的恰好是那个不起作用的兼容字段，放行 model_name 就等于
+// 按 kling-v1 收费、按 kling-v2-master 生成。
+func TestConvertToRequestPayloadPinsBilledModel(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "kling-v1"},
+	}
+
+	// model_name 是真正决定上游用哪个模型的字段，只能拒绝：静默改回去等于丢掉用户
+	// 明确写了的参数，放行则是绕过计费。
+	_, err := adaptor.convertToRequestPayload(&relaycommon.TaskSubmitReq{
+		Prompt:   "a cat",
+		Metadata: map[string]interface{}{"model_name": "kling-v2-master"},
+	}, info)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "can't change model with metadata")
+
+	// model 在反序列化前就被删掉了，够不到请求体，因此中和而非报错。
+	payload, err := adaptor.convertToRequestPayload(&relaycommon.TaskSubmitReq{
+		Prompt:   "a cat",
+		Metadata: map[string]interface{}{"model": "kling-v2-master"},
+	}, info)
+	require.NoError(t, err)
+	assert.Equal(t, "kling-v1", payload.ModelName)
+	assert.Equal(t, "kling-v1", payload.Model)
+
+	// 与请求一致的模型名不该被误伤：透传上游私有参数是 metadata 的正当用途。
+	payload, err = adaptor.convertToRequestPayload(&relaycommon.TaskSubmitReq{
+		Prompt:   "a cat",
+		Metadata: map[string]interface{}{"model_name": "kling-v1", "cfg_scale": 0.8},
+	}, info)
+	require.NoError(t, err)
+	assert.Equal(t, "kling-v1", payload.ModelName)
+	assert.Equal(t, 0.8, payload.CfgScale)
+}

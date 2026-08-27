@@ -53,3 +53,30 @@ func TestConvertToRequestPayloadPinsBilledDuration(t *testing.T) {
 		})
 	}
 }
+
+// hailuo 原先用的是 TaskSubmitReq 自带的 UnmarshalMetadata，那个变体不删任何键，
+// 所以 metadata.model 能直接覆盖计费依据的模型：按 MiniMax-Hailuo-02 收费、
+// 按 MiniMax-Hailuo-2.3 生成。
+func TestConvertToRequestPayloadPinsBilledModel(t *testing.T) {
+	adaptor := &TaskAdaptor{}
+	info := &relaycommon.RelayInfo{
+		ChannelMeta: &relaycommon.ChannelMeta{UpstreamModelName: "MiniMax-Hailuo-02"},
+	}
+
+	payload, err := adaptor.convertToRequestPayload(&relaycommon.TaskSubmitReq{
+		Prompt:   "a cat",
+		Metadata: map[string]interface{}{"model": "MiniMax-Hailuo-2.3"},
+	}, info)
+	require.NoError(t, err)
+	assert.Equal(t, "MiniMax-Hailuo-02", payload.Model)
+
+	// 其余 metadata 字段仍要照常透传给上游。
+	payload, err = adaptor.convertToRequestPayload(&relaycommon.TaskSubmitReq{
+		Prompt:   "a cat",
+		Metadata: map[string]interface{}{"aigc_watermark": true},
+	}, info)
+	require.NoError(t, err)
+	assert.Equal(t, "MiniMax-Hailuo-02", payload.Model)
+	require.NotNil(t, payload.AigcWatermark)
+	assert.True(t, *payload.AigcWatermark)
+}

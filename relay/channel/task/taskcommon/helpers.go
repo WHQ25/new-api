@@ -29,6 +29,23 @@ func UnmarshalMetadata(metadata map[string]any, target any) error {
 	return nil
 }
 
+// AssertBilledModel 断言 metadata 反序列化之后请求体里的模型仍然是计费依据的那个。
+//
+// UnmarshalMetadata 把 metadata 整体打进请求体，靠 delete 挡住模型字段是黑名单，
+// 永远追不上新字段——可灵上游认的是 model_name，delete("model") 删掉的恰好是那个
+// 不起作用的兼容字段。调用方在反序列化之后断言一次，请求体里有几个模型字段都不会漏。
+//
+// 这里不能像 duration 那样回填了事：计费和渠道选择都发生在此之前，让 metadata 里的
+// 模型生效就是绕过计费，静默改回去又等于丢掉用户明确写了的参数。只能拒绝。
+func AssertBilledModel(billedModel string, payloadModels ...string) error {
+	for _, m := range payloadModels {
+		if m != "" && m != billedModel {
+			return fmt.Errorf("can't change model with metadata: billed %q, request body says %q", billedModel, m)
+		}
+	}
+	return nil
+}
+
 // DefaultString returns val if non-empty, otherwise fallback.
 func DefaultString(val, fallback string) string {
 	if val == "" {

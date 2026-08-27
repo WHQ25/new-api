@@ -284,8 +284,14 @@ func (a *TaskAdaptor) convertToRequestPayload(req *relaycommon.TaskSubmitReq, in
 		r.ModelName = "kling-v1"
 		r.Model = "kling-v1"
 	}
+	billedModel := r.ModelName
 	if err := taskcommon.UnmarshalMetadata(req.Metadata, &r); err != nil {
 		return nil, errors.Wrap(err, "unmarshal metadata failed")
+	}
+	// 模型必须与计费同源。UnmarshalMetadata 只删 metadata 里的 model，而可灵上游认的是
+	// model_name——被删的恰好是那个不起作用的兼容字段，所以这里必须再断言一次。
+	if err := taskcommon.AssertBilledModel(billedModel, r.ModelName, r.Model); err != nil {
+		return nil, err
 	}
 	// 时长必须与计费同源。metadata 反序列化会覆盖上面写入的默认值，所以只在这之后定值：
 	// 否则 duration=5 配 metadata.duration=15 的请求会按 5 秒收费、按 15 秒生成。
